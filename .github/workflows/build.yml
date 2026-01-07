@@ -26,7 +26,7 @@ jobs:
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
-          vcpkgGitCommitId: '01f602195983451bc83e72f4214af2cbc495aa94'
+          vcpkgGitCommitId: '5f4cddb220a4630a8ffc8db9270b8bf03483df60'
 
       - name: Install dependencies
         run: vcpkg install grpc:x64-windows protobuf:x64-windows gtest:x64-windows --triplet x64-windows
