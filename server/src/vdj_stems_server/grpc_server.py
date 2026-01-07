@@ -23,8 +23,22 @@ class StemsInferenceServicer(stems_pb2_grpc.StemsInferenceServicer):
 
     def RunInference(self, request, context):
         try:
+            if not request.inputs:
+                return stems_pb2.InferenceResponse(
+                    session_id=request.session_id,
+                    status=1,
+                    error_message="No input tensors provided",
+                )
+
             input_tensor = request.inputs[0]
             shape = tuple(input_tensor.shape.dims)
+
+            if not shape or len(shape) < 2:
+                return stems_pb2.InferenceResponse(
+                    session_id=request.session_id,
+                    status=1,
+                    error_message="Invalid tensor shape",
+                )
 
             stems_bytes, out_shape = self.engine.separate_tensor(
                 input_tensor.data, shape, input_tensor.dtype
@@ -46,26 +60,41 @@ class StemsInferenceServicer(stems_pb2_grpc.StemsInferenceServicer):
             return stems_pb2.InferenceResponse(
                 session_id=request.session_id, status=0, outputs=outputs
             )
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Invalid input: {e}")
+            return stems_pb2.InferenceResponse(
+                session_id=request.session_id,
+                status=1,
+                error_message=f"Invalid input: {e}",
+            )
         except Exception as e:
-            logger.error(f"Inference error: {e}")
+            logger.exception(f"Inference error for session {request.session_id}")
             return stems_pb2.InferenceResponse(
                 session_id=request.session_id, status=1, error_message=str(e)
             )
 
     def StreamInference(self, request_iterator, context):
-        for chunk in request_iterator:
-            audio = np.frombuffer(chunk.audio_data, dtype=np.float32).reshape(
-                chunk.channels, -1
-            )
-            stems = self.engine.separate(audio, sample_rate=chunk.sample_rate)
+        try:
+            for chunk in request_iterator:
+                if chunk.channels <= 0:
+                    logger.warning(f"Invalid channel count: {chunk.channels}")
+                    continue
 
-            for name, data in stems.items():
-                yield stems_pb2.StemChunk(
-                    session_id=chunk.session_id,
-                    chunk_index=chunk.chunk_index,
-                    stem_name=name,
-                    audio_data=data.tobytes(),
+                audio = np.frombuffer(chunk.audio_data, dtype=np.float32).reshape(
+                    chunk.channels, -1
                 )
+                stems = self.engine.separate(audio, sample_rate=chunk.sample_rate)
+
+                for name, data in stems.items():
+                    yield stems_pb2.StemChunk(
+                        session_id=chunk.session_id,
+                        chunk_index=chunk.chunk_index,
+                        stem_name=name,
+                        audio_data=data.tobytes(),
+                    )
+        except Exception as e:
+            logger.exception(f"StreamInference error")
+            context.abort(grpc.StatusCode.INTERNAL, str(e))
 
 
 def serve(host="0.0.0.0", port=50051, max_workers=10):

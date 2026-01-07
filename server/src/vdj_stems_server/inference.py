@@ -1,9 +1,13 @@
+import logging
+import threading
 import torch
 import torchaudio
 import numpy as np
 from demucs import pretrained
 from demucs.apply import apply_model
 from typing import Dict, Tuple, Optional, Any
+
+logger = logging.getLogger(__name__)
 
 STEM_NAMES = ["drums", "bass", "other", "vocals"]
 
@@ -19,12 +23,16 @@ class StemsInferenceEngine:
         self.segment_length = segment_length
         self.overlap = overlap
 
-        print(
+        logger.info(
             f"Initializing Demucs inference engine (model={model_name}, device={self.device})"
         )
-        self.model = pretrained.get_model(model_name)
-        self.model.to(self.device)
-        self.model.eval()
+        try:
+            self.model = pretrained.get_model(model_name)
+            self.model.to(self.device)
+            self.model.eval()
+        except Exception as e:
+            logger.error(f"Failed to load model '{model_name}': {e}")
+            raise RuntimeError(f"Failed to load Demucs model: {e}") from e
 
     @property
     def gpu_memory_mb(self) -> int:
@@ -88,11 +96,14 @@ class StemsInferenceEngine:
         return output_stems, output_shape
 
 
-_engine = None
+_engine: Optional[StemsInferenceEngine] = None
+_engine_lock = threading.Lock()
 
 
-def get_engine(**kwargs):
+def get_engine(**kwargs) -> StemsInferenceEngine:
     global _engine
     if _engine is None:
-        _engine = StemsInferenceEngine(**kwargs)
+        with _engine_lock:
+            if _engine is None:
+                _engine = StemsInferenceEngine(**kwargs)
     return _engine

@@ -23,22 +23,32 @@ def main():
         level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
+    logger = logging.getLogger(__name__)
+
+    if not (0 < args.port <= 65535):
+        logger.error(f"Invalid port: {args.port}")
+        sys.exit(1)
+
+    if args.workers <= 0:
+        logger.error(f"Invalid workers count: {args.workers}")
+        sys.exit(1)
+
     server = serve(host=args.host, port=args.port, max_workers=args.workers)
+    shutdown_event = False
 
     def handle_shutdown(signum, frame):
-        print("\nStopping server...")
-        server.stop(0)
-        sys.exit(0)
+        nonlocal shutdown_event
+        if shutdown_event:
+            return
+        shutdown_event = True
+        logger.info("Shutting down server (grace period: 5s)...")
+        server.stop(grace=5)
 
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
 
-    print(f"VDJ Stems GPU Server running on {args.host}:{args.port}")
-    try:
-        while True:
-            time.sleep(86400)
-    except KeyboardInterrupt:
-        server.stop(0)
+    logger.info(f"VDJ Stems GPU Server running on {args.host}:{args.port}")
+    server.wait_for_termination()
 
 
 if __name__ == "__main__":
