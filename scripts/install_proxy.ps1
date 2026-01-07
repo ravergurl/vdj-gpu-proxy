@@ -26,6 +26,17 @@ if (-not $VdjPath -or -not (Test-Path $VdjPath)) {
     exit 1
 }
 
+if (-not (Test-Path (Join-Path $VdjPath "VirtualDJ.exe"))) {
+    Write-Error "VirtualDJ.exe not found in $VdjPath. Invalid installation path."
+    exit 1
+}
+
+$vdjProcess = Get-Process VirtualDJ -ErrorAction SilentlyContinue
+if ($vdjProcess) {
+    Write-Error "VirtualDJ is running. Please close it before installing."
+    exit 1
+}
+
 Write-Host "VirtualDJ found at: $VdjPath"
 
 $ortDll = Join-Path $VdjPath "onnxruntime.dll"
@@ -54,7 +65,11 @@ if (-not $proxyDll) {
 if (Test-Path $ortDll) {
     if (-not (Test-Path $ortRealDll)) {
         Write-Host "Backing up original onnxruntime.dll to onnxruntime_real.dll..."
-        Copy-Item $ortDll $ortRealDll
+        Copy-Item $ortDll $ortRealDll -ErrorAction Stop
+        if (-not (Test-Path $ortRealDll)) {
+            Write-Error "Backup failed. Aborting installation."
+            exit 1
+        }
     }
 }
 

@@ -60,9 +60,5 @@ echo "Installation complete!"
 echo ""
 echo "To start the server:"
 echo "  cd $ROOT_DIR/server"
-if [ -d ".venv" ]; then
-    echo "  source .venv/bin/activate"
-else
-    echo "  source venv/bin/activate"
-fi
+echo "  source .venv/bin/activate"
 echo "  vdj-stems-server --host 0.0.0.0 --port 50051"
