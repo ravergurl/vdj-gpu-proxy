@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package vdj.stems;
+
+option cc_enable_arenas = true;
+
+service StemsInference {
+  rpc RunInference(InferenceRequest) returns (InferenceResponse);
+  rpc StreamInference(stream AudioChunk) returns (stream StemChunk);
+  rpc GetServerInfo(Empty) returns (ServerInfo);
+}
+
+message Empty {}
+
+message ServerInfo {
+  string version = 1;
+  string model_name = 2;
+  int32 gpu_memory_mb = 3;
+  bool ready = 4;
+}
+
+message TensorShape {
+  repeated int64 dims = 1;
+}
+
+message Tensor {
+  TensorShape shape = 1;
+  int32 dtype = 2;  // ONNXTensorElementDataType
+  bytes data = 3;   // Raw float32 data
+}
+
+message InferenceRequest {
+  uint64 session_id = 1;
+  repeated string input_names = 2;
+  repeated Tensor inputs = 3;
+  repeated string output_names = 4;
+}
+
+message InferenceResponse {
+  uint64 session_id = 1;
+  int32 status = 2;  // 0 = success
+  string error_message = 3;
+  repeated Tensor outputs = 4;
+}
+
+message AudioChunk {
+  uint64 session_id = 1;
+  int64 chunk_index = 2;
+  int32 sample_rate = 3;
+  int32 channels = 4;
+  bytes audio_data = 5;  // float32 interleaved
+}
+
+message StemChunk {
+  uint64 session_id = 1;
+  int64 chunk_index = 2;
+  string stem_name = 3;  // vocals, drums, bass, other
+  bytes audio_data = 4;
+}
