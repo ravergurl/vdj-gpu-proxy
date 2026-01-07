@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "onnxruntime_c_api.h"
 #include "tensor_utils.h"
 
 namespace vdj {

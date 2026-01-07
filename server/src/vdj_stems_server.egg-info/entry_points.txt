@@ -1,2 +1,5 @@
 [console_scripts]
+vdj-stems-benchmark = vdj_stems_server.cli:benchmark
+vdj-stems-health = vdj_stems_server.cli:health_check
 vdj-stems-server = vdj_stems_server.main:main
+vdj-stems-status = vdj_stems_server.cli:status

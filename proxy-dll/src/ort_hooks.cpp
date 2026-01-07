@@ -215,7 +215,6 @@ static const OrtApi* ORT_API_CALL HookedGetApi(uint32_t version) noexcept {
     return &g_HookedApi;
 }
 
-extern "C" __declspec(dllexport)
 const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
     if (g_OriginalApiBase == nullptr && g_OriginalOrtGetApiBase) {
         g_OriginalApiBase = g_OriginalOrtGetApiBase();
