@@ -33,17 +33,12 @@ Write-Host "VirtualDJ found at: $VdjPath"
 
 $ortDll = Join-Path $VdjPath "onnxruntime.dll"
 $ortRealDll = Join-Path $VdjPath "onnxruntime_real.dll"
-$proxyDll = Join-Path $PSScriptRoot "..\build\proxy-dll\onnxruntime.dll"
-
-# Try fallback paths for proxy DLL if build path doesn't match
-if (-not (Test-Path $proxyDll)) {
-    $proxyDll = Join-Path $PSScriptRoot "onnxruntime.dll"
-}
+$proxyDll = Join-Path $PSScriptRoot "..\build\Release\onnxruntime.dll"
 
 # Backup original
 if (Test-Path $ortDll) {
     if (-not (Test-Path $ortRealDll)) {
-        Write-Host "Backing up original onnxruntime.dll to onnxruntime_real.dll..."
+        Write-Host "Backing up original onnxruntime.dll..."
         Copy-Item $ortDll $ortRealDll
     }
 }
@@ -71,5 +66,3 @@ Set-ItemProperty -Path $regPath -Name "Enabled" -Value 1
 Write-Host ""
 Write-Host "Installation complete!"
 Write-Host "Server: ${ServerAddress}:${ServerPort}"
-Write-Host ""
-Write-Host "To uninstall, run: .\uninstall_proxy.ps1"

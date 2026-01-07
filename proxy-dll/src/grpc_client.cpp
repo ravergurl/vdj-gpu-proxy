@@ -2,14 +2,21 @@
 #include <grpcpp/grpcpp.h>
 #include "stems.grpc.pb.h"
 #include <mutex>
+#include <chrono>
 
 namespace vdj {
+
+namespace {
+    constexpr size_t MAX_MESSAGE_SIZE = 100 * 1024 * 1024;  // 100MB
+    constexpr int CONNECT_TIMEOUT_SECONDS = 5;
+    constexpr int INFERENCE_TIMEOUT_SECONDS = 30;
+}
 
 class GrpcClient::Impl {
 public:
     std::unique_ptr<stems::StemsInference::Stub> stub;
     std::shared_ptr<grpc::Channel> channel;
-    std::mutex mutex;
+    mutable std::mutex mutex;
     bool connected = false;
 };
 
@@ -22,8 +29,8 @@ bool GrpcClient::Connect(const std::string& address, uint16_t port) {
     std::string target = address + ":" + std::to_string(port);
 
     grpc::ChannelArguments args;
-    args.SetMaxReceiveMessageSize(100 * 1024 * 1024); // 100MB for large tensors
-    args.SetMaxSendMessageSize(100 * 1024 * 1024);
+    args.SetMaxReceiveMessageSize(MAX_MESSAGE_SIZE); // 100MB for large tensors
+    args.SetMaxSendMessageSize(MAX_MESSAGE_SIZE);
 
     impl_->channel = grpc::CreateCustomChannel(
         target,
@@ -35,7 +42,7 @@ bool GrpcClient::Connect(const std::string& address, uint16_t port) {
 
     // Test connection
     grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(CONNECT_TIMEOUT_SECONDS));
 
     stems::Empty request;
     stems::ServerInfo response;
@@ -54,6 +61,7 @@ void GrpcClient::Disconnect() {
 }
 
 bool GrpcClient::IsConnected() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
     return impl_->connected;
 }
 
@@ -66,12 +74,17 @@ InferenceResult GrpcClient::RunInference(
     InferenceResult result;
     result.success = false;
 
-    if (!impl_->connected || !impl_->stub) {
-        result.error_message = "Not connected to server";
+    if (input_names.size() != inputs.size()) {
+        result.error_message = "Input names count does not match inputs count";
         return result;
     }
 
     std::lock_guard<std::mutex> lock(impl_->mutex);
+
+    if (!impl_->connected || !impl_->stub) {
+        result.error_message = "Not connected to server";
+        return result;
+    }
 
     // Build request
     stems::InferenceRequest request;
@@ -96,7 +109,7 @@ InferenceResult GrpcClient::RunInference(
 
     // Call server
     grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(INFERENCE_TIMEOUT_SECONDS));
 
     stems::InferenceResponse response;
     grpc::Status status = impl_->stub->RunInference(&context, request, &response);

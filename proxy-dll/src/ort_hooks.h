@@ -1,21 +1,7 @@
 #pragma once
 
 #include <cstdint>
-
-// Forward declarations matching ONNX Runtime C API
-struct OrtApi;
-struct OrtApiBase;
-struct OrtSession;
-struct OrtRunOptions;
-struct OrtValue;
-struct OrtStatus;
-struct OrtMemoryInfo;
-struct OrtTensorTypeAndShapeInfo;
-
-// Our exports
-extern "C" {
-    __declspec(dllexport) const OrtApiBase* ORT_API_CALL OrtGetApiBase(void);
-}
+#include "../include/onnxruntime_c_api.h"
 
 // Internal functions
 bool InitializeOrtProxy();

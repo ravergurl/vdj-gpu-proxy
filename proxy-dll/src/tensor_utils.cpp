@@ -1,23 +1,8 @@
 #include "tensor_utils.h"
 #include <cstring>
+#include <cstdlib>
 
 namespace vdj {
-
-// ONNXTensorElementDataType values
-enum OrtDataType {
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED = 0,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT = 1,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8 = 2,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8 = 3,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16 = 4,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16 = 5,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 = 6,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 = 7,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING = 8,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL = 9,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 = 10,
-    ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE = 11,
-};
 
 size_t GetElementSize(int32_t dtype) {
     switch (dtype) {
@@ -35,22 +20,64 @@ size_t GetElementSize(int32_t dtype) {
     }
 }
 
-// Note: These functions require the actual OrtApi function pointers
-// The implementation below is pseudocode showing the pattern
-// Real implementation needs proper OrtApi struct with function pointers
-
 TensorData ExtractTensorData(const OrtApi* api, const OrtValue* value) {
     TensorData result;
+    OrtTensorTypeAndShapeInfo* info = nullptr;
+    
+    OrtStatus* status = api->GetTensorTypeAndShape(value, &info);
+    if (status) {
+        api->ReleaseStatus(status);
+        return result;
+    }
 
-    // This is pseudocode - real impl needs actual OrtApi calls
-    // api->GetTensorTypeAndShape(value, &shape_info);
-    // api->GetDimensionsCount(shape_info, &num_dims);
-    // api->GetDimensions(shape_info, dims.data(), num_dims);
-    // api->GetTensorElementType(shape_info, &dtype);
-    // api->GetTensorShapeElementCount(shape_info, &count);
-    // api->GetTensorMutableData(value, &data_ptr);
+    size_t num_dims = 0;
+    status = api->GetDimensionsCount(info, &num_dims);
+    if (status) {
+        api->ReleaseStatus(status);
+        api->ReleaseTensorTypeAndShapeInfo(info);
+        return result;
+    }
 
-    // Placeholder - will be implemented with real OrtApi
+    result.shape.resize(num_dims);
+    status = api->GetDimensions(info, result.shape.data(), num_dims);
+    if (status) {
+        api->ReleaseStatus(status);
+        api->ReleaseTensorTypeAndShapeInfo(info);
+        return result;
+    }
+
+    ONNXTensorElementDataType dtype;
+    status = api->GetTensorElementType(info, &dtype);
+    if (status) {
+        api->ReleaseStatus(status);
+        api->ReleaseTensorTypeAndShapeInfo(info);
+        return result;
+    }
+    result.dtype = static_cast<int32_t>(dtype);
+
+    size_t element_count = 0;
+    status = api->GetTensorShapeElementCount(info, &element_count);
+    if (status) {
+        api->ReleaseStatus(status);
+        api->ReleaseTensorTypeAndShapeInfo(info);
+        return result;
+    }
+
+    void* data_ptr = nullptr;
+    status = api->GetTensorMutableData(const_cast<OrtValue*>(value), &data_ptr);
+    if (status) {
+        api->ReleaseStatus(status);
+        api->ReleaseTensorTypeAndShapeInfo(info);
+        return result;
+    }
+
+    if (data_ptr && element_count > 0) {
+        size_t element_size = GetElementSize(result.dtype);
+        result.data.resize(element_count * element_size);
+        memcpy(result.data.data(), data_ptr, result.data.size());
+    }
+
+    api->ReleaseTensorTypeAndShapeInfo(info);
     return result;
 }
 
@@ -59,7 +86,6 @@ OrtValue* CreateOrtValue(
     const TensorData& tensor,
     void** out_buffer
 ) {
-    // Allocate buffer
     size_t element_size = GetElementSize(tensor.dtype);
     size_t total_elements = 1;
     for (int64_t dim : tensor.shape) {
@@ -74,13 +100,36 @@ OrtValue* CreateOrtValue(
 
     memcpy(*out_buffer, tensor.data.data(), buffer_size);
 
-    // Create OrtValue wrapping buffer
-    // api->CreateMemoryInfo("Cpu", OrtArenaAllocator, 0, OrtMemTypeDefault, &mem_info);
-    // api->CreateTensorWithDataAsOrtValue(mem_info, *out_buffer, buffer_size,
-    //                                      shape, shape_len, dtype, &ort_value);
+    OrtMemoryInfo* mem_info = nullptr;
+    OrtStatus* status = api->CreateMemoryInfo("Cpu", OrtArenaAllocator, 0, OrtMemTypeDefault, &mem_info);
+    if (status) {
+        api->ReleaseStatus(status);
+        free(*out_buffer);
+        *out_buffer = nullptr;
+        return nullptr;
+    }
 
-    // Placeholder - will be implemented with real OrtApi
-    return nullptr;
+    OrtValue* ort_value = nullptr;
+    status = api->CreateTensorWithDataAsOrtValue(
+        mem_info,
+        *out_buffer,
+        buffer_size,
+        tensor.shape.data(),
+        tensor.shape.size(),
+        static_cast<ONNXTensorElementDataType>(tensor.dtype),
+        &ort_value
+    );
+
+    api->ReleaseMemoryInfo(mem_info);
+
+    if (status) {
+        api->ReleaseStatus(status);
+        free(*out_buffer);
+        *out_buffer = nullptr;
+        return nullptr;
+    }
+
+    return ort_value;
 }
 
 } // namespace vdj

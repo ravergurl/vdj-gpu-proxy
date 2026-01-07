@@ -1,5 +1,6 @@
 #!/bin/bash
 # Install VDJ Stems Server on GPU machine
+# Header identifying the script purpose for users and system administrators.
 
 set -e
 
