@@ -1,0 +1,2 @@
+[console_scripts]
+vdj-stems-server = vdj_stems_server.main:main

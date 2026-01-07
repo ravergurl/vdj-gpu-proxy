@@ -1,5 +1,3 @@
-# Uninstall VDJ GPU Proxy DLL
-
 param(
     [string]$VdjPath = ""
 )

@@ -1,7 +1,4 @@
 #!/bin/bash
-# Install VDJ Stems Server on GPU machine
-# Header identifying the script purpose for users and system administrators.
-
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,10 +6,8 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "Installing VDJ Stems Server..."
 
-# Check Python version
 python3 --version || { echo "Python 3 required"; exit 1; }
 
-# Check CUDA
 if command -v nvidia-smi &> /dev/null; then
     echo "CUDA GPU detected:"
     nvidia-smi --query-gpu=name,memory.total --format=csv
@@ -20,7 +15,6 @@ else
     echo "Warning: No NVIDIA GPU detected. Server will use CPU."
 fi
 
-# Create virtual environment
 cd "$ROOT_DIR/server"
 if command -v uv &> /dev/null; then
     echo "Using uv for virtual environment..."
@@ -32,7 +26,6 @@ else
     source venv/bin/activate
 fi
 
-# Install dependencies
 echo "Installing dependencies..."
 pip install --upgrade pip
 if command -v uv &> /dev/null; then
@@ -41,7 +34,6 @@ else
     pip install -e .
 fi
 
-# Generate proto files
 echo "Generating proto files..."
 cd "$ROOT_DIR"
 if command -v uv &> /dev/null; then
@@ -50,7 +42,6 @@ else
     pip install grpcio-tools
 fi
 
-# Run proto generation script if it exists, otherwise use protoc directly
 if [ -f "scripts/generate_proto.py" ]; then
     python3 scripts/generate_proto.py
 else

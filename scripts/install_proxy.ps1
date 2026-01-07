@@ -1,5 +1,3 @@
-# Install VDJ GPU Proxy DLL
-
 param(
     [string]$VdjPath = "",
     [string]$ServerAddress = "127.0.0.1",
@@ -8,7 +6,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Find VirtualDJ installation
 if (-not $VdjPath) {
     $possiblePaths = @(
         "$env:ProgramFiles\VirtualDJ",
@@ -33,27 +30,37 @@ Write-Host "VirtualDJ found at: $VdjPath"
 
 $ortDll = Join-Path $VdjPath "onnxruntime.dll"
 $ortRealDll = Join-Path $VdjPath "onnxruntime_real.dll"
-$proxyDll = Join-Path $PSScriptRoot "..\build\Release\onnxruntime.dll"
 
-# Backup original
-if (Test-Path $ortDll) {
-    if (-not (Test-Path $ortRealDll)) {
-        Write-Host "Backing up original onnxruntime.dll..."
-        Copy-Item $ortDll $ortRealDll
+$proxyDllCandidates = @(
+    (Join-Path $PSScriptRoot "..\build\proxy-dll\onnxruntime.dll"),
+    (Join-Path $PSScriptRoot "..\build\proxy-dll\Release\onnxruntime.dll"),
+    (Join-Path $PSScriptRoot "..\build\proxy-dll\Debug\onnxruntime.dll"),
+    (Join-Path $PSScriptRoot "onnxruntime.dll")
+)
+
+$proxyDll = ""
+foreach ($candidate in $proxyDllCandidates) {
+    if (Test-Path $candidate) {
+        $proxyDll = $candidate
+        break
     }
 }
 
-# Copy proxy DLL
-if (-not (Test-Path $proxyDll)) {
+if (-not $proxyDll) {
     Write-Error "Proxy DLL not found. Build the project first."
     exit 1
 }
 
-Write-Host "Installing proxy DLL..."
+if (Test-Path $ortDll) {
+    if (-not (Test-Path $ortRealDll)) {
+        Write-Host "Backing up original onnxruntime.dll to onnxruntime_real.dll..."
+        Copy-Item $ortDll $ortRealDll
+    }
+}
+
+Write-Host "Installing proxy DLL from $proxyDll..."
 Copy-Item $proxyDll $ortDll -Force
 
-# Configure registry
-Write-Host "Configuring settings..."
 $regPath = "HKCU:\Software\VDJ-GPU-Proxy"
 if (-not (Test-Path $regPath)) {
     New-Item -Path $regPath -Force | Out-Null
@@ -63,6 +70,5 @@ Set-ItemProperty -Path $regPath -Name "ServerAddress" -Value $ServerAddress
 Set-ItemProperty -Path $regPath -Name "ServerPort" -Value $ServerPort
 Set-ItemProperty -Path $regPath -Name "Enabled" -Value 1
 
-Write-Host ""
 Write-Host "Installation complete!"
 Write-Host "Server: ${ServerAddress}:${ServerPort}"

@@ -1,0 +1,253 @@
+ONNX RUNTIME C API - TENSOR OPERATIONS REFERENCE
+================================================
+
+1. OrtApi->GetTensorTypeAndShape
+   Signature: ORT_API2_STATUS(GetTensorTypeAndShape, 
+                              _In_ const OrtValue* value, 
+                              _Outptr_ OrtTensorTypeAndShapeInfo** out)
+   
+   Purpose: Get shape and type information from an OrtValue tensor
+   
+   Parameters:
+   - value: Must be a tensor (not a map/sequence/etc)
+   - out: Newly created OrtTensorTypeAndShapeInfo (must free with ReleaseTensorTypeAndShapeInfo)
+   
+   Returns: OrtStatus (NULL on success)
+
+---
+
+2. OrtApi->GetDimensionsCount
+   Signature: ORT_API2_STATUS(GetDimensionsCount, 
+                              _In_ const OrtTensorTypeAndShapeInfo* info, 
+                              _Out_ size_t* out)
+   
+   Purpose: Get the number of dimensions in a tensor shape
+   
+   Parameters:
+   - info: OrtTensorTypeAndShapeInfo from GetTensorTypeAndShape
+   - out: Receives the dimension count
+   
+   Returns: OrtStatus (NULL on success)
+
+---
+
+3. OrtApi->GetDimensions
+   Signature: ORT_API2_STATUS(GetDimensions, 
+                              _In_ const OrtTensorTypeAndShapeInfo* info, 
+                              _Out_ int64_t* dim_values,
+                              size_t dim_values_length)
+   
+   Purpose: Get the actual dimension values from a tensor shape
+   
+   Parameters:
+   - info: OrtTensorTypeAndShapeInfo from GetTensorTypeAndShape
+   - dim_values: Array to receive dimension values
+   - dim_values_length: Number of elements in dim_values (use GetDimensionsCount)
+   
+   Returns: OrtStatus (NULL on success)
+   
+   Example: For shape [2, 3, 4], dim_values will be {2, 3, 4}
+
+---
+
+4. OrtApi->GetTensorElementType
+   Signature: ORT_API2_STATUS(GetTensorElementType, 
+                              _In_ const OrtTensorTypeAndShapeInfo* info,
+                              _Out_ enum ONNXTensorElementDataType* out)
+   
+   Purpose: Get the data type of tensor elements
+   
+   Parameters:
+   - info: OrtTensorTypeAndShapeInfo from GetTensorTypeAndShape
+   - out: Receives the ONNXTensorElementDataType
+   
+   Returns: OrtStatus (NULL on success)
+   
+   Possible Values:
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT      // float (32-bit)
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE     // double (64-bit)
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32      // int32_t
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64      // int64_t
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8      // uint8_t
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8       // int8_t
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16     // uint16_t
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16      // int16_t
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32     // uint32_t
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64     // uint64_t
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL       // bool
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING     // std::string
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16    // float16
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16   // bfloat16
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_COMPLEX64  // complex64
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_COMPLEX128 // complex128
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E4M3FN
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E4M3FNUZ
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E5M2
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E5M2FNUZ
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT4
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_INT4
+   ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT4E2M1
+
+---
+
+5. OrtApi->GetTensorShapeElementCount
+   Signature: ORT_API2_STATUS(GetTensorShapeElementCount, 
+                              _In_ const OrtTensorTypeAndShapeInfo* info, 
+                              _Out_ size_t* out)
+   
+   Purpose: Get total number of elements in a tensor (product of all dimensions)
+   
+   Parameters:
+   - info: OrtTensorTypeAndShapeInfo from GetTensorTypeAndShape
+   - out: Receives the element count
+   
+   Returns: OrtStatus (NULL on success)
+   
+   Behavior:
+   [] (0 dimensions) = 1
+   [1,3,4] = 12
+   [2,0,4] = 0
+   [-1,3,4] = -1 (dynamic dimension)
+
+---
+
+6. OrtApi->GetTensorMutableData
+   Signature: ORT_API2_STATUS(GetTensorMutableData, 
+                              _In_ OrtValue* value, 
+                              _Outptr_ void** out)
+   
+   Purpose: Get a pointer to the raw data inside a tensor for reading/writing
+   
+   Parameters:
+   - value: A tensor type (string tensors are not supported)
+   - out: Receives pointer to the internal storage
+   
+   Returns: OrtStatus (NULL on success)
+   
+   Important: The returned pointer is valid until the OrtValue is destroyed
+
+---
+
+7. OrtApi->CreateMemoryInfo
+   Signature: ORT_API2_STATUS(CreateMemoryInfo, 
+                              _In_ const char* name, 
+                              enum OrtAllocatorType type, 
+                              int id,
+                              enum OrtMemType mem_type, 
+                              _Outptr_ OrtMemoryInfo** out)
+   
+   Purpose: Create memory information descriptor for CPU or device memory
+   
+   Parameters:
+   - name: Device name ("Cpu", "Cuda", "DML", "TensorRT", etc.)
+   - type: Allocator type (OrtDeviceAllocator=0, OrtArenaAllocator=1, etc.)
+   - id: Device ID (0 for CPU, GPU device index for GPU)
+   - mem_type: Memory type (OrtMemTypeDefault=0, OrtMemTypeCPU=-1, etc.)
+   - out: Newly created OrtMemoryInfo (must free with ReleaseMemoryInfo)
+   
+   Returns: OrtStatus (NULL on success)
+   
+   Allocator Types:
+   OrtInvalidAllocator = -1
+   OrtDeviceAllocator = 0
+   OrtArenaAllocator = 1
+   OrtReadOnlyAllocator = 2
+   
+   Memory Types:
+   OrtMemTypeCPUInput = -2
+   OrtMemTypeCPUOutput = -1
+   OrtMemTypeCPU = OrtMemTypeCPUOutput
+   OrtMemTypeDefault = 0
+
+---
+
+8. OrtApi->CreateTensorWithDataAsOrtValue
+   Signature: ORT_API2_STATUS(CreateTensorWithDataAsOrtValue, 
+                              _In_ const OrtMemoryInfo* info, 
+                              _Inout_ void* p_data,
+                              size_t p_data_len, 
+                              _In_ const int64_t* shape, 
+                              size_t shape_len, 
+                              ONNXTensorElementDataType type,
+                              _Outptr_ OrtValue** out)
+   
+   Purpose: Create an OrtValue tensor from an existing data buffer
+   
+   Parameters:
+   - info: OrtMemoryInfo from CreateMemoryInfo or CreateCpuMemoryInfo
+   - p_data: Pointer to the data buffer
+   - p_data_len: Size of the data buffer in bytes
+   - shape: Array of dimension values
+   - shape_len: Number of dimensions
+   - type: Data type (ONNXTensorElementDataType)
+   - out: Newly created OrtValue (must free with ReleaseValue)
+   
+   Returns: OrtStatus (NULL on success)
+   
+   Important: 
+   - User is responsible for managing the lifetime of the data buffer
+   - Buffer must remain valid for the lifetime of the OrtValue
+   - OrtValue does NOT take ownership of the buffer
+
+---
+
+USAGE EXAMPLE
+=============
+
+// Get output tensor info
+OrtTensorTypeAndShapeInfo* info = NULL;
+api->GetTensorTypeAndShape(output_tensor, &info);
+
+// Get dimensions
+size_t num_dims = 0;
+api->GetDimensionsCount(info, &num_dims);
+
+int64_t* dims = (int64_t*)malloc(num_dims * sizeof(int64_t));
+api->GetDimensions(info, dims, num_dims);
+
+// Get element type
+ONNXTensorElementDataType elem_type;
+api->GetTensorElementType(info, &elem_type);
+
+// Get total elements
+size_t element_count = 0;
+api->GetTensorShapeElementCount(info, &element_count);
+
+// Get data pointer
+float* data = NULL;
+api->GetTensorMutableData(output_tensor, (void**)&data);
+
+// Process data...
+
+// Create input tensor
+OrtMemoryInfo* mem_info = NULL;
+api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mem_info);
+
+float input_data[] = {1.0f, 2.0f, 3.0f};
+int64_t input_shape[] = {1, 3};
+OrtValue* input_tensor = NULL;
+
+api->CreateTensorWithDataAsOrtValue(
+    mem_info,
+    input_data,
+    3 * sizeof(float),
+    input_shape,
+    2,
+    ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+    &input_tensor
+);
+
+// Use input_tensor for inference...
+
+// Cleanup
+api->ReleaseValue(input_tensor);
+api->ReleaseMemoryInfo(mem_info);
+api->ReleaseTensorTypeAndShapeInfo(info);
+free(dims);
+
+---
+
+REAL-WORLD EXAMPLES
+===================
+
+From microsoft/onnxruntime (Java bindin

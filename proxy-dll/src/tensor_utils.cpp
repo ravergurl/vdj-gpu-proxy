@@ -1,4 +1,5 @@
 #include "tensor_utils.h"
+#include "../include/onnxruntime_c_api.h"
 #include <cstring>
 #include <cstdlib>
 
@@ -132,4 +133,4 @@ OrtValue* CreateOrtValue(
     return ort_value;
 }
 
-} // namespace vdj
+}

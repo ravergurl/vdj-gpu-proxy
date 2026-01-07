@@ -78,6 +78,22 @@ pip install -e .
 python ../scripts/generate_proto.py
 ```
 
+## Troubleshooting
+
+### Proxy DLL not loading
+- Ensure `onnxruntime_real.dll` exists in the VirtualDJ folder.
+- Check if VirtualDJ version is compatible (it must use `onnxruntime.dll`).
+- Check DebugView (sysinternals) for log messages from `VDJ-GPU-Proxy`.
+
+### Connection errors
+- Verify the GPU server is running and accessible over the network.
+- Check firewall settings on both machines (port 50051).
+- Ensure `ServerAddress` in registry is correct.
+
+### Performance issues
+- Stems separation depends on network latency and GPU speed.
+- Using a wired connection instead of Wi-Fi is highly recommended.
+
 ## License
 
 MIT
