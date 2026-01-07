@@ -12,7 +12,6 @@ if (-not $VdjPath) {
         "${env:ProgramFiles(x86)}\VirtualDJ",
         "$env:LOCALAPPDATA\VirtualDJ"
     )
-
     foreach ($path in $possiblePaths) {
         if (Test-Path (Join-Path $path "VirtualDJ.exe")) {
             $VdjPath = $path
@@ -21,69 +20,61 @@ if (-not $VdjPath) {
     }
 }
 
-if (-not $VdjPath -or -not (Test-Path $VdjPath)) {
-    Write-Error "VirtualDJ installation not found. Please specify -VdjPath"
-    exit 1
-}
-
-if (-not (Test-Path (Join-Path $VdjPath "VirtualDJ.exe"))) {
-    Write-Error "VirtualDJ.exe not found in $VdjPath. Invalid installation path."
+if (-not $VdjPath -or -not (Test-Path (Join-Path $VdjPath "VirtualDJ.exe"))) {
+    Write-Error "VirtualDJ not found. Specify -VdjPath"
     exit 1
 }
 
 $vdjProcess = Get-Process VirtualDJ -ErrorAction SilentlyContinue
 if ($vdjProcess) {
-    Write-Error "VirtualDJ is running. Please close it before installing."
+    Write-Error "Close VirtualDJ first"
     exit 1
 }
 
-Write-Host "VirtualDJ found at: $VdjPath"
+Write-Host "VirtualDJ: $VdjPath"
 
-$ortDll = Join-Path $VdjPath "onnxruntime.dll"
-$ortRealDll = Join-Path $VdjPath "onnxruntime_real.dll"
+$scriptRoot = $PSScriptRoot
+$projectRoot = Split-Path $scriptRoot -Parent
 
 $proxyDllCandidates = @(
-    (Join-Path $PSScriptRoot "..\build\proxy-dll\onnxruntime.dll"),
-    (Join-Path $PSScriptRoot "..\build\proxy-dll\Release\onnxruntime.dll"),
-    (Join-Path $PSScriptRoot "..\build\proxy-dll\Debug\onnxruntime.dll"),
-    (Join-Path $PSScriptRoot "onnxruntime.dll")
+    (Join-Path $projectRoot "artifacts\proxy-dll-windows\onnxruntime.dll"),
+    (Join-Path $projectRoot "build\proxy-dll\Release\onnxruntime.dll"),
+    (Join-Path $projectRoot "build\proxy-dll\onnxruntime.dll"),
+    (Join-Path $scriptRoot "onnxruntime.dll")
 )
 
 $proxyDll = ""
 foreach ($candidate in $proxyDllCandidates) {
     if (Test-Path $candidate) {
-        $proxyDll = $candidate
+        $proxyDll = (Resolve-Path $candidate).Path
         break
     }
 }
 
 if (-not $proxyDll) {
-    Write-Error "Proxy DLL not found. Build the project first."
+    Write-Error "Proxy DLL not found. Download from GitHub Actions or build first."
     exit 1
 }
 
-if (Test-Path $ortDll) {
-    if (-not (Test-Path $ortRealDll)) {
-        Write-Host "Backing up original onnxruntime.dll to onnxruntime_real.dll..."
-        Copy-Item $ortDll $ortRealDll -ErrorAction Stop
-        if (-not (Test-Path $ortRealDll)) {
-            Write-Error "Backup failed. Aborting installation."
-            exit 1
-        }
-    }
+Write-Host "Proxy DLL: $proxyDll"
+
+$ortDll = Join-Path $VdjPath "onnxruntime.dll"
+$ortRealDll = Join-Path $VdjPath "onnxruntime_real.dll"
+
+if ((Test-Path $ortDll) -and -not (Test-Path $ortRealDll)) {
+    Write-Host "Backing up original DLL..."
+    Copy-Item $ortDll $ortRealDll -ErrorAction Stop
 }
 
-Write-Host "Installing proxy DLL from $proxyDll..."
+Write-Host "Installing proxy..."
 Copy-Item $proxyDll $ortDll -Force
 
 $regPath = "HKCU:\Software\VDJ-GPU-Proxy"
-if (-not (Test-Path $regPath)) {
-    New-Item -Path $regPath -Force | Out-Null
-}
-
+if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
 Set-ItemProperty -Path $regPath -Name "ServerAddress" -Value $ServerAddress
 Set-ItemProperty -Path $regPath -Name "ServerPort" -Value $ServerPort
 Set-ItemProperty -Path $regPath -Name "Enabled" -Value 1
 
-Write-Host "Installation complete!"
-Write-Host "Server: ${ServerAddress}:${ServerPort}"
+Write-Host ""
+Write-Host "Installed! Server: ${ServerAddress}:${ServerPort}"
+Write-Host "Start VirtualDJ to use GPU stems."
