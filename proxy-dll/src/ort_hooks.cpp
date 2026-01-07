@@ -181,7 +181,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     const char* const* output_names,
     size_t output_names_len,
     OrtValue** outputs
-) {
+) noexcept {
     if (!g_Config.enabled) {
         return g_OriginalRun(session, run_options, input_names, inputs,
                             input_len, output_names, output_names_len, outputs);
