@@ -7,43 +7,37 @@ on:
     branches: [master, main]
   workflow_dispatch:
 
-env:
-  SCCACHE_GHA_ENABLED: "true"
-
 jobs:
   build-windows:
     runs-on: windows-latest
-    env:
-      VCPKG_DEFAULT_TRIPLET: x64-windows
-      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Export GitHub Actions cache variables
-        uses: actions/github-script@v7
+      - name: Setup Python (for Conan)
+        uses: actions/setup-python@v5
         with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+          python-version: '3.12'
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-
-      - name: Cache vcpkg installed packages
+      - name: Cache Conan packages
         uses: actions/cache@v4
         with:
-          path: |
-            ${{ github.workspace }}/vcpkg/installed
-            ${{ github.workspace }}/vcpkg/packages
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: |
-            vcpkg-${{ runner.os }}-
+          path: ~/.conan2
+          key: conan-win-${{ hashFiles('conanfile.txt') }}
+          restore-keys: conan-win-
 
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgJsonGlob: 'vcpkg.json'
-          runVcpkgInstall: true
+      - name: Install Conan
+        run: pip install conan
+
+      - name: Setup Conan profile
+        run: |
+          conan profile detect --force
+          # Use Release build with MSVC
+          $profile = conan profile path default
+          (Get-Content $profile) -replace 'build_type=Release', 'build_type=Release' | Set-Content $profile
+
+      - name: Install dependencies (pre-built binaries)
+        run: |
+          conan install . --output-folder=build --build=missing -s build_type=Release
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -52,16 +46,13 @@ jobs:
 
       - name: Configure CMake
         run: |
-          cmake -B build -G Ninja `
+          cmake -B build -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache `
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
-            -DBUILD_TESTS=ON `
-            -DENABLE_UNITY_BUILD=ON
+            -DCMAKE_TOOLCHAIN_FILE="build/conan_toolchain.cmake" `
+            -DBUILD_TESTS=ON
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --config Release --parallel
 
       - name: Run C++ Tests
         run: ctest --test-dir build -C Release --output-on-failure
@@ -71,8 +62,8 @@ jobs:
         with:
           name: proxy-dll-windows
           path: |
-            build/proxy-dll/*.dll
-            build/proxy-dll/*.pdb
+            build/proxy-dll/Release/*.dll
+            build/proxy-dll/Release/*.pdb
 
   build-python:
     runs-on: ubuntu-latest
