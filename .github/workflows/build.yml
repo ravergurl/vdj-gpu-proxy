@@ -87,13 +87,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-
-      - name: Cache venv
-        uses: actions/cache@v4
-        with:
-          path: server/.venv
-          key: venv-${{ runner.os }}-${{ hashFiles('server/pyproject.toml') }}
-          restore-keys: venv-${{ runner.os }}-
+          cache-dependency-glob: "server/pyproject.toml"
 
       - name: Install dependencies
         working-directory: server
