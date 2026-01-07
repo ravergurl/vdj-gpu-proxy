@@ -5,6 +5,11 @@ $ProtoDir = "$RepoRoot\proto"
 $OutputDir = "$RepoRoot\proxy-dll\generated"
 $ProtoFile = "$ProtoDir\stems.proto"
 
+if (-not (Test-Path $ProtoFile)) {
+    Write-Error "Proto file not found: $ProtoFile"
+    exit 1
+}
+
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
@@ -79,7 +84,7 @@ Write-Host "Found grpc_cpp_plugin: $GrpcPlugin"
 
 # Run generation
 Write-Host "Generating C++ proto files..."
-& $Protoc --cpp_out=$OutputDir --grpc_out=$OutputDir --plugin=protoc-gen-grpc=$GrpcPlugin "-I$ProtoDir" "$ProtoFile"
+& $Protoc "--cpp_out=$OutputDir" "--grpc_out=$OutputDir" "--plugin=protoc-gen-grpc=$GrpcPlugin" "-I$ProtoDir" "$ProtoFile"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Proto generation failed with exit code $LASTEXITCODE"

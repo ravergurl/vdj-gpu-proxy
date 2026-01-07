@@ -32,18 +32,23 @@ def main():
     ]
 
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
-        print("Proto generation failed")
+        print(f"Proto generation failed:\n{result.stderr}")
         sys.exit(1)
 
-    # Fix imports in generated files
     grpc_file = output_dir / "stems_pb2_grpc.py"
     if grpc_file.exists():
-        content = grpc_file.read_text()
-        content = content.replace("import stems_pb2", "from . import stems_pb2")
-        grpc_file.write_text(content)
+        try:
+            content = grpc_file.read_text(encoding="utf-8")
+            new_content = content.replace("import stems_pb2", "from . import stems_pb2")
+            if content == new_content:
+                print(f"Warning: No import replacements made in {grpc_file}")
+            grpc_file.write_text(new_content, encoding="utf-8")
+        except Exception as e:
+            print(f"Error fixing imports in {grpc_file}: {e}")
+            sys.exit(1)
 
     print("Proto generation complete!")
 

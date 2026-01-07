@@ -8,6 +8,11 @@ echo "Installing VDJ Stems Server..."
 
 python3 --version || { echo "Python 3 required"; exit 1; }
 
+PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)
+if [[ ! "$PYTHON_VERSION" =~ ^3\.(1[0-9]|[2-9][0-9]) ]]; then
+    echo "Warning: Python 3.10+ recommended (found $PYTHON_VERSION)"
+fi
+
 if command -v nvidia-smi &> /dev/null; then
     echo "CUDA GPU detected:"
     nvidia-smi --query-gpu=name,memory.total --format=csv
@@ -16,15 +21,17 @@ else
 fi
 
 cd "$ROOT_DIR/server"
+VENV_DIR=".venv"
+
 if command -v uv &> /dev/null; then
     echo "Using uv for virtual environment..."
-    uv venv
-    source .venv/bin/activate
+    uv venv "$VENV_DIR"
 else
     echo "Using venv for virtual environment..."
-    python3 -m venv venv
-    source venv/bin/activate
+    python3 -m venv "$VENV_DIR"
 fi
+
+source "$VENV_DIR/bin/activate" || { echo "Failed to activate venv at $VENV_DIR"; exit 1; }
 
 echo "Installing dependencies..."
 pip install --upgrade pip
