@@ -1,0 +1,10 @@
+{
+  "name": "vdj-gpu-proxy",
+  "version": "1.0.0",
+  "dependencies": [
+    "grpc",
+    "protobuf",
+    "gtest"
+  ],
+  "builtin-baseline": "5f4cddb220a4630a8ffc8db9270b8bf03483df60"
+}
