@@ -1,6 +1,7 @@
 #include "ort_hooks.h"
 #include "grpc_client.h"
 #include "tensor_utils.h"
+#include "logger.h"
 #include "../include/onnxruntime_c_api.h"
 #include <windows.h>
 #include <synchapi.h>
@@ -98,6 +99,8 @@ static void LoadConfig() {
 }
 
 bool InitializeOrtProxy() {
+    vdj::log::Initialize();
+    
     if (!g_BufferLockInitialized) {
         InitializeCriticalSection(&g_BufferLock);
         g_BufferLockInitialized = true;

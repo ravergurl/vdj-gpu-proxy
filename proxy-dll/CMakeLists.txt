@@ -3,6 +3,7 @@ add_library(onnxruntime SHARED
     src/ort_hooks.cpp
     src/grpc_client.cpp
     src/tensor_utils.cpp
+    src/logger.cpp
 )
 
 target_include_directories(onnxruntime PRIVATE
@@ -10,9 +11,9 @@ target_include_directories(onnxruntime PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Platform-specific link libraries for thread-safe initialization (synchapi.h)
+# Platform-specific link libraries
 if(WIN32)
-    target_link_libraries(onnxruntime PRIVATE kernel32)
+    target_link_libraries(onnxruntime PRIVATE kernel32 shell32 advapi32)
 endif()
 
 target_link_libraries(onnxruntime PRIVATE
