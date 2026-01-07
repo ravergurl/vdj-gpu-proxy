@@ -157,12 +157,14 @@ if (-not $SkipBuild) {
             -DCMAKE_C_COMPILER=cl `
             -DCMAKE_CXX_COMPILER=cl `
             -DBUILD_TESTS=ON `
+            -DENABLE_UNITY_BUILD=ON `
             ..
     } else {
         cmake -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_TOOLCHAIN_FILE="$toolchainFile" `
             -DCMAKE_BUILD_TYPE=Release `
             -DBUILD_TESTS=ON `
+            -DENABLE_UNITY_BUILD=ON `
             ..
     }
     

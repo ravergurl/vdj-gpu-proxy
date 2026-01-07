@@ -9,6 +9,7 @@ on:
 
 env:
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   build-windows:
@@ -25,17 +26,29 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgJsonGlob: 'vcpkg.json'
           runVcpkgInstall: true
 
-      - name: Configure CMake
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure CMake (Ninja + sccache)
         run: |
-          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-            -DBUILD_TESTS=ON
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
+            -DBUILD_TESTS=ON `
+            -DENABLE_UNITY_BUILD=ON
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -48,8 +61,8 @@ jobs:
         with:
           name: proxy-dll-windows
           path: |
-            build/proxy-dll/Release/*.dll
-            build/proxy-dll/Release/*.pdb
+            build/proxy-dll/*.dll
+            build/proxy-dll/*.pdb
 
   build-python:
     runs-on: ubuntu-latest
