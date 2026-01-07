@@ -1,0 +1,40 @@
+# Build outputs
+build/
+*.dll
+*.lib
+*.obj
+*.pdb
+*.exp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Generated proto files
+*_pb2.py
+*_pb2_grpc.py
+*_pb2.pyi
+*.pb.cc
+*.pb.h
+*.grpc.pb.cc
+*.grpc.pb.h
+
+# IDE
+.vs/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log

@@ -18,9 +18,11 @@ log_error() { echo -e "${RED}[-]${NC} $1"; }
 echo ""
 echo -e "${CYAN}========================================"
 echo "  VDJ-GPU-Proxy Server Setup"
+echo "  (uv for maximum speed)"
 echo -e "========================================${NC}"
 echo ""
 
+# Check Python version
 if ! command -v python3 &> /dev/null; then
     log_error "Python 3.10+ is required"
     exit 1
@@ -36,6 +38,7 @@ if [[ $PYTHON_MAJOR -lt 3 ]] || [[ $PYTHON_MAJOR -eq 3 && $PYTHON_MINOR -lt 10 ]
 fi
 log_success "Python $PYTHON_VERSION found"
 
+# Check GPU
 if command -v nvidia-smi &> /dev/null; then
     log_success "NVIDIA GPU detected:"
     nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | head -1
@@ -43,30 +46,41 @@ else
     log_warn "No NVIDIA GPU detected - will use CPU (slow)"
 fi
 
-log_status "Creating virtual environment..."
-cd "$ROOT_DIR/server"
-
-VENV_DIR=".venv"
-if command -v uv &> /dev/null; then
-    log_status "Using uv for fast package management..."
-    uv venv "$VENV_DIR"
-    source "$VENV_DIR/bin/activate"
-    uv pip install -e ".[dev]"
-else
-    python3 -m venv "$VENV_DIR"
-    source "$VENV_DIR/bin/activate"
-    pip install --upgrade pip
-    pip install -e ".[dev]"
+# Install uv if not present (10-100x faster than pip)
+if ! command -v uv &> /dev/null; then
+    log_status "Installing uv (fast Python package manager)..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.cargo/bin:$PATH"
 fi
 
+if command -v uv &> /dev/null; then
+    log_success "uv $(uv --version)"
+else
+    log_error "Failed to install uv"
+    exit 1
+fi
+
+# Setup Python environment
+log_status "Creating virtual environment with uv..."
+cd "$ROOT_DIR/server"
+
+uv venv .venv
+source .venv/bin/activate
+
+# Install dependencies (blazing fast with uv)
+log_status "Installing Python dependencies..."
+uv pip install -e ".[dev]"
+
+# Generate proto files
 log_status "Generating proto files..."
 cd "$ROOT_DIR"
-pip install grpcio-tools
+uv pip install grpcio-tools
 python3 scripts/generate_proto.py
 
+# Run tests
 log_status "Running tests..."
 cd "$ROOT_DIR/server"
-pytest tests/ -v --tb=short || log_warn "Some tests failed (may be expected without GPU)"
+python -m pytest tests/ -v --tb=short || log_warn "Some tests failed"
 
 echo ""
 echo -e "${GREEN}========================================"

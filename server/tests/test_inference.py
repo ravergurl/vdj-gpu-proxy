@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import torch
 from unittest.mock import MagicMock, patch
 
 
@@ -39,10 +40,8 @@ class TestStemsInferenceEngine:
         with patch("torch.cuda.is_available", return_value=False):
             from vdj_stems_server.inference import StemsInferenceEngine
 
-            mock_sources = np.random.randn(4, 2, 44100).astype(np.float32)
-            mocker.patch(
-                "vdj_stems_server.inference.apply_model", return_value=mock_sources[np.newaxis, ...]
-            )
+            mock_sources = torch.randn(1, 4, 2, 44100)
+            mocker.patch("vdj_stems_server.inference.apply_model", return_value=mock_sources)
 
             engine = StemsInferenceEngine(device="cpu")
             mono_audio = np.random.randn(44100).astype(np.float32)
@@ -58,10 +57,8 @@ class TestStemsInferenceEngine:
         with patch("torch.cuda.is_available", return_value=False):
             from vdj_stems_server.inference import StemsInferenceEngine
 
-            mock_sources = np.random.randn(4, 2, 44100).astype(np.float32)
-            mocker.patch(
-                "vdj_stems_server.inference.apply_model", return_value=mock_sources[np.newaxis, ...]
-            )
+            mock_sources = torch.randn(1, 4, 2, 44100)
+            mocker.patch("vdj_stems_server.inference.apply_model", return_value=mock_sources)
 
             engine = StemsInferenceEngine(device="cpu")
             stereo_audio = np.random.randn(2, 44100).astype(np.float32)
