@@ -23,6 +23,12 @@ size_t GetElementSize(int32_t dtype) {
 
 TensorData ExtractTensorData(const OrtApi* api, const OrtValue* value) {
     TensorData result;
+    
+    // Null parameter checks
+    if (!api || !value) {
+        return result;
+    }
+    
     OrtTensorTypeAndShapeInfo* info = nullptr;
     
     OrtStatus* status = api->GetTensorTypeAndShape(value, &info);
@@ -87,12 +93,36 @@ OrtValue* CreateOrtValue(
     const TensorData& tensor,
     void** out_buffer
 ) {
+    if (!api || !out_buffer) {
+        return nullptr;
+    }
+    
+    *out_buffer = nullptr;
+    
     size_t element_size = GetElementSize(tensor.dtype);
+    if (element_size == 0) {
+        return nullptr;
+    }
+    
     size_t total_elements = 1;
     for (int64_t dim : tensor.shape) {
-        total_elements *= dim;
+        if (dim <= 0) {
+            return nullptr;
+        }
+        if (total_elements > SIZE_MAX / static_cast<size_t>(dim)) {
+            return nullptr;
+        }
+        total_elements *= static_cast<size_t>(dim);
+    }
+    
+    if (total_elements > SIZE_MAX / element_size) {
+        return nullptr;
     }
     size_t buffer_size = total_elements * element_size;
+    
+    if (tensor.data.size() < buffer_size) {
+        return nullptr;
+    }
 
     *out_buffer = malloc(buffer_size);
     if (!*out_buffer) {

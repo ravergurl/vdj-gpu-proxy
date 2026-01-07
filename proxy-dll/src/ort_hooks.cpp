@@ -1,5 +1,5 @@
 #include "ort_hooks.h"
-#include "onnxruntime_c_api.h"
+#include "../include/onnxruntime_c_api.h"
 #include <windows.h>
 #include <synchapi.h>
 #include <cstring>
@@ -50,7 +50,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     const char* const* output_names,
     size_t output_names_len,
     OrtValue** outputs
-);
+) noexcept;
 
 ProxyConfig* GetProxyConfig() {
     return &g_Config;
@@ -154,14 +154,14 @@ static BOOL CALLBACK InitializeApiCallback(PINIT_ONCE InitOnce, PVOID Parameter,
     return TRUE;
 }
 
-static const OrtApi* ORT_API_CALL HookedGetApi(uint32_t version) {
+static const OrtApi* ORT_API_CALL HookedGetApi(uint32_t version) noexcept {
     // Thread-safe one-time initialization
     InitOnceExecuteOnce(&g_InitOnce, InitializeApiCallback, NULL, NULL);
     return &g_HookedApi;
 }
 
 extern "C" __declspec(dllexport)
-const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) {
+const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
     if (g_OriginalApiBase == nullptr && g_OriginalOrtGetApiBase) {
         g_OriginalApiBase = g_OriginalOrtGetApiBase();
 

@@ -1,0 +1,242 @@
+================================================================================
+ONNX RUNTIME C API - TENSOR OPERATIONS DOCUMENTATION
+================================================================================
+
+COMPLETE REFERENCE FOR 8 CRITICAL TENSOR FUNCTIONS
+Source: https://github.com/microsoft/onnxruntime/blob/517e06c6807f946d6a8589f876db94bde2a49f21/include/onnxruntime/core/session/onnxruntime_c_api.h
+
+================================================================================
+FUNCTION SIGNATURES
+================================================================================
+
+1. OrtApi->GetTensorTypeAndShape (Line 1779)
+   ORT_API2_STATUS(GetTensorTypeAndShape, 
+       _In_ const OrtValue* value, 
+       _Outptr_ OrtTensorTypeAndShapeInfo** out);
+   
+   Purpose: Get shape and type information from an OrtValue tensor
+   Returns: OrtStatus (NULL on success)
+
+2. OrtApi->GetDimensionsCount (Line 1726)
+   ORT_API2_STATUS(GetDimensionsCount, 
+       _In_ const OrtTensorTypeAndShapeInfo* info, 
+       _Out_ size_t* out);
+   
+   Purpose: Get the number of dimensions in a tensor shape
+   Returns: OrtStatus (NULL on success)
+
+3. OrtApi->GetDimensions (Line 1736)
+   ORT_API2_STATUS(GetDimensions, 
+       _In_ const OrtTensorTypeAndShapeInfo* info, 
+       _Out_ int64_t* dim_values,
+       size_t dim_values_length);
+   
+   Purpose: Get the actual dimension values from a tensor shape
+   Returns: OrtStatus (NULL on success)
+
+4. OrtApi->GetTensorElementType (Line 1714)
+   ORT_API2_STATUS(GetTensorElementType, 
+       _In_ const OrtTensorTypeAndShapeInfo* info,
+       _Out_ enum ONNXTensorElementDataType* out);
+   
+   Purpose: Get the data type of tensor elements
+   Returns: OrtStatus (NULL on success)
+
+5. OrtApi->GetTensorShapeElementCount (Line 1766)
+   ORT_API2_STATUS(GetTensorShapeElementCount, 
+       _In_ const OrtTensorTypeAndShapeInfo* info, 
+       _Out_ size_t* out);
+   
+   Purpose: Get total number of elements in a tensor (product of all dimensions)
+   Returns: OrtStatus (NULL on success)
+
+6. OrtApi->GetTensorMutableData (Line 1605)
+   ORT_API2_STATUS(GetTensorMutableData, 
+       _In_ OrtValue* value, 
+       _Outptr_ void** out);
+   
+   Purpose: Get a pointer to the raw data inside a tensor for reading/writing
+   Returns: OrtStatus (NULL on success)
+
+7. OrtApi->CreateMemoryInfo (Line 1813)
+   ORT_API2_STATUS(CreateMemoryInfo, 
+       _In_ const char* name, 
+       enum OrtAllocatorType type, 
+       int id,
+       enum OrtMemType mem_type, 
+       _Outptr_ OrtMemoryInfo** out);
+   
+   Purpose: Create memory information descriptor for CPU or device memory
+   Returns: OrtStatus (NULL on success)
+
+8. OrtApi->CreateTensorWithDataAsOrtValue (Line 1582)
+   ORT_API2_STATUS(CreateTensorWithDataAsOrtValue, 
+       _In_ const OrtMemoryInfo* info, 
+       _Inout_ void* p_data,
+       size_t p_data_len, 
+       _In_ const int64_t* shape, 
+       size_t shape_len, 
+       ONNXTensorElementDataType type,
+       _Outptr_ OrtValue** out);
+   
+   Purpose: Create an OrtValue tensor from an existing data buffer
+   Returns: OrtStatus (NULL on success)
+
+================================================================================
+ENUM VALUES
+================================================================================
+
+ONNXTensorElementDataType:
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT      // float (32-bit)
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE     // double (64-bit)
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32      // int32_t
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64      // int64_t
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8      // uint8_t
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8       // int8_t
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16     // uint16_t
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16      // int16_t
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32     // uint32_t
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64     // uint64_t
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL       // bool
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING     // std::string
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16    // float16
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16   // bfloat16
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_COMPLEX64  // complex64
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_COMPLEX128 // complex128
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E4M3FN
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E4M3FNUZ
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E5M2
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT8E5M2FNUZ
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT4
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_INT4
+  ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT4E2M1
+
+OrtAllocatorType:
+  OrtInvalidAllocator = -1
+  OrtDeviceAllocator = 0
+  OrtArenaAllocator = 1
+  OrtReadOnlyAllocator = 2
+
+OrtMemType:
+  OrtMemTypeCPUInput = -2
+  OrtMemTypeCPUOutput = -1
+  OrtMemTypeCPU = OrtMemTypeCPUOutput
+  OrtMemTypeDefault = 0
+
+================================================================================
+QUICK USAGE PATTERN
+================================================================================
+
+// Read output tensor
+OrtTensorTypeAndShapeInfo* info = NULL;
+api->GetTensorTypeAndShape(output_tensor, &info);
+
+size_t num_dims = 0;
+api->GetDimensionsCount(info, &num_dims);
+
+int64_t* dims = (int64_t*)malloc(num_dims * sizeof(int64_t));
+api->GetDimensions(info, dims, num_dims);
+
+ONNXTensorElementDataType elem_type;
+api->GetTensorElementType(info, &elem_type);
+
+size_t element_count = 0;
+api->GetTensorShapeElementCount(info, &element_count);
+
+float* data = NULL;
+api->GetTensorMutableData(output_tensor, (void**)&data);
+
+// Create input tensor
+OrtMemoryInfo* mem_info = NULL;
+api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mem_info);
+
+float input_data[] = {1.0f, 2.0f, 3.0f};
+int64_t input_shape[] = {1, 3};
+OrtValue* input_tensor = NULL;
+
+api->CreateTensorWithDataAsOrtValue(
+    mem_info,
+    input_data,
+    3 * sizeof(float),
+    input_shape,
+    2,
+    ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+    &input_tensor
+);
+
+// Cleanup
+api->ReleaseValue(input_tensor);
+api->ReleaseMemoryInfo(mem_info);
+api->ReleaseTensorTypeAndShapeInfo(info);
+free(dims);
+
+================================================================================
+DOCUMENTATION FILES
+================================================================================
+
+1. ONNX_C_API_REFERENCE.txt
+   - Quick reference guide with all 8 functions
+   - Parameter descriptions
+   - Enum values
+   - Real-world examples from GitHub
+
+2. onnx_c_api_examples.c
+   - Complete working C code examples
+   - 4 comprehensive examples:
+     * Reading output tensor information
+     * Creating input tensor from buffer
+     * Complete inference loop
+     * Handling different data types
+   - Compilation instructions
+
+3. ONNX_C_API_SUMMARY.md
+   - Comprehensive markdown documentation
+   - GitHub permalinks to source code
+   - Detailed parameter descriptions
+   - Real-world usage examples from:
+     * microsoft/onnxruntime (Java bindings)
+     * google/magika
+     * brainflow-dev/brainflow
+
+4. ONNX_API_INDEX.txt
+   - This file
+   - Quick lookup reference
+
+================================================================================
+KEY POINTS
+================================================================================
+
+1. Always release resources:
+   - ReleaseTensorTypeAndShapeInfo()
+   - ReleaseMemoryInfo()
+   - ReleaseValue()
+
+2. Buffer ownership:
+   - CreateTensorWithDataAsOrtValue does NOT take ownership
+   - User must manage buffer lifetime
+
+3. Dynamic shapes:
+   - Negative dimension values indicate dynamic dimensions
+
+4. Type safety:
+   - Always check element type before casting tensor data pointers
+
+5. Memory alignment:
+   - Ensure data buffers are properly aligned for the data type
+
+6. Thread safety:
+   - OrtValue objects are not thread-safe
+   - Use synchronization if needed
+
+================================================================================
+OFFICIAL SOURCES
+================================================================================
+
+ONNX Runtime Repository:
+https://github.com/microsoft/onnxruntime
+
+C API Header File:
+https://github.com/microsoft/onnxruntime/blob/main/include/onnxruntime/core/session/onnxruntime_c_api.h
+
+ONNX Runtime Documentation:
+https://onnxrunt
