@@ -8,7 +8,6 @@ on:
   workflow_dispatch:
 
 env:
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
@@ -16,6 +15,7 @@ jobs:
     runs-on: windows-latest
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows
+      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +29,16 @@ jobs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
 
+      - name: Cache vcpkg installed packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg/installed
+            ${{ github.workspace }}/vcpkg/packages
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -40,7 +50,7 @@ jobs:
         with:
           arch: x64
 
-      - name: Configure CMake (Ninja + sccache)
+      - name: Configure CMake
         run: |
           cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
@@ -51,7 +61,7 @@ jobs:
             -DENABLE_UNITY_BUILD=ON
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --parallel
 
       - name: Run C++ Tests
         run: ctest --test-dir build -C Release --output-on-failure
