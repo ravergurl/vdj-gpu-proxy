@@ -1,9 +1,14 @@
 #include "ort_hooks.h"
+#include "grpc_client.h"
+#include "tensor_utils.h"
 #include "../include/onnxruntime_c_api.h"
 #include <windows.h>
 #include <synchapi.h>
 #include <cstring>
 #include <cstdio>
+#include <vector>
+#include <string>
+#include <atomic>
 
 // OrtStatusPtr typedef for convenience
 typedef OrtStatus* OrtStatusPtr;
@@ -20,6 +25,15 @@ static ProxyConfig g_Config = {
     true,
     true
 };
+
+// Connection state
+static std::atomic<bool> g_ServerConnected{false};
+static std::atomic<uint64_t> g_SessionCounter{0};
+
+// Output buffer tracking for cleanup
+static std::vector<void*> g_AllocatedBuffers;
+static CRITICAL_SECTION g_BufferLock;
+static bool g_BufferLockInitialized = false;
 
 // Thread safety for API initialization
 static INIT_ONCE g_InitOnce = INIT_ONCE_STATIC_INIT;
@@ -84,6 +98,11 @@ static void LoadConfig() {
 }
 
 bool InitializeOrtProxy() {
+    if (!g_BufferLockInitialized) {
+        InitializeCriticalSection(&g_BufferLock);
+        g_BufferLockInitialized = true;
+    }
+    
     LoadConfig();
 
     // Find original DLL path - look in same directory with _real suffix
@@ -117,10 +136,43 @@ bool InitializeOrtProxy() {
     }
 
     OutputDebugStringA("VDJ-GPU-Proxy: Initialized successfully\n");
+    
+    if (g_Config.enabled) {
+        vdj::GrpcClient* client = vdj::GetGrpcClient();
+        if (client->Connect(g_Config.server_address, g_Config.server_port)) {
+            g_ServerConnected = true;
+            OutputDebugStringA("VDJ-GPU-Proxy: Connected to GPU server\n");
+        } else {
+            g_ServerConnected = false;
+            if (g_Config.fallback_to_local) {
+                OutputDebugStringA("VDJ-GPU-Proxy: Server unavailable, will use local fallback\n");
+            } else {
+                OutputDebugStringA("VDJ-GPU-Proxy: Server unavailable and fallback disabled\n");
+            }
+        }
+    }
+    
     return true;
 }
 
 void ShutdownOrtProxy() {
+    if (g_ServerConnected) {
+        vdj::GrpcClient* client = vdj::GetGrpcClient();
+        client->Disconnect();
+        g_ServerConnected = false;
+    }
+    
+    if (g_BufferLockInitialized) {
+        EnterCriticalSection(&g_BufferLock);
+        for (void* buf : g_AllocatedBuffers) {
+            free(buf);
+        }
+        g_AllocatedBuffers.clear();
+        LeaveCriticalSection(&g_BufferLock);
+        DeleteCriticalSection(&g_BufferLock);
+        g_BufferLockInitialized = false;
+    }
+    
     if (g_hOriginalDll) {
         FreeLibrary(g_hOriginalDll);
         g_hOriginalDll = nullptr;
@@ -171,7 +223,6 @@ const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
     return &g_HookedApiBase;
 }
 
-// The actual hook - this is where the magic happens
 OrtStatusPtr ORT_API_CALL HookedRun(
     OrtSession* session,
     const OrtRunOptions* run_options,
@@ -182,21 +233,95 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     size_t output_names_len,
     OrtValue** outputs
 ) noexcept {
-    if (!g_Config.enabled) {
+    if (!g_Config.enabled || !g_ServerConnected) {
         return g_OriginalRun(session, run_options, input_names, inputs,
                             input_len, output_names, output_names_len, outputs);
     }
 
-    // TODO: Implement remote inference
-    // 1. Extract tensor data from inputs
-    // 2. Serialize to protobuf
-    // 3. Send via gRPC to server
-    // 4. Receive response
-    // 5. Create output OrtValues
-    // 6. Return
+    vdj::GrpcClient* client = vdj::GetGrpcClient();
+    if (!client->IsConnected()) {
+        if (g_Config.fallback_to_local) {
+            return g_OriginalRun(session, run_options, input_names, inputs,
+                                input_len, output_names, output_names_len, outputs);
+        }
+        return g_OriginalApi->CreateStatus(ORT_FAIL, "GPU server not connected");
+    }
 
-    // For now, fallback to local
-    OutputDebugStringA("VDJ-GPU-Proxy: HookedRun called - forwarding to local\n");
-    return g_OriginalRun(session, run_options, input_names, inputs,
-                        input_len, output_names, output_names_len, outputs);
+    std::vector<std::string> input_name_vec;
+    std::vector<vdj::TensorData> input_tensors;
+    std::vector<std::string> output_name_vec;
+
+    for (size_t i = 0; i < input_len; i++) {
+        input_name_vec.push_back(input_names[i]);
+        vdj::TensorData td = vdj::ExtractTensorData(g_OriginalApi, inputs[i]);
+        if (td.shape.empty()) {
+            OutputDebugStringA("VDJ-GPU-Proxy: Failed to extract input tensor\n");
+            if (g_Config.fallback_to_local) {
+                return g_OriginalRun(session, run_options, input_names, inputs,
+                                    input_len, output_names, output_names_len, outputs);
+            }
+            return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to extract input tensor");
+        }
+        input_tensors.push_back(std::move(td));
+    }
+
+    for (size_t i = 0; i < output_names_len; i++) {
+        output_name_vec.push_back(output_names[i]);
+    }
+
+    uint64_t session_id = ++g_SessionCounter;
+    vdj::InferenceResult result = client->RunInference(
+        session_id, input_name_vec, input_tensors, output_name_vec
+    );
+
+    if (!result.success) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Remote inference failed: %s\n", 
+                 result.error_message.c_str());
+        OutputDebugStringA(msg);
+        
+        if (g_Config.fallback_to_local) {
+            OutputDebugStringA("VDJ-GPU-Proxy: Falling back to local inference\n");
+            return g_OriginalRun(session, run_options, input_names, inputs,
+                                input_len, output_names, output_names_len, outputs);
+        }
+        return g_OriginalApi->CreateStatus(ORT_FAIL, result.error_message.c_str());
+    }
+
+    if (result.outputs.size() != output_names_len) {
+        OutputDebugStringA("VDJ-GPU-Proxy: Output count mismatch\n");
+        if (g_Config.fallback_to_local) {
+            return g_OriginalRun(session, run_options, input_names, inputs,
+                                input_len, output_names, output_names_len, outputs);
+        }
+        return g_OriginalApi->CreateStatus(ORT_FAIL, "Output count mismatch from server");
+    }
+
+    for (size_t i = 0; i < output_names_len; i++) {
+        void* buffer = nullptr;
+        OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, result.outputs[i], &buffer);
+        if (!ort_value) {
+            OutputDebugStringA("VDJ-GPU-Proxy: Failed to create output OrtValue\n");
+            for (size_t j = 0; j < i; j++) {
+                if (outputs[j]) {
+                    g_OriginalApi->ReleaseValue(outputs[j]);
+                    outputs[j] = nullptr;
+                }
+            }
+            if (g_Config.fallback_to_local) {
+                return g_OriginalRun(session, run_options, input_names, inputs,
+                                    input_len, output_names, output_names_len, outputs);
+            }
+            return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to create output tensor");
+        }
+        outputs[i] = ort_value;
+        if (buffer && g_BufferLockInitialized) {
+            EnterCriticalSection(&g_BufferLock);
+            g_AllocatedBuffers.push_back(buffer);
+            LeaveCriticalSection(&g_BufferLock);
+        }
+    }
+
+    OutputDebugStringA("VDJ-GPU-Proxy: Remote inference successful\n");
+    return nullptr;
 }
