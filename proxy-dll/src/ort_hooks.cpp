@@ -146,7 +146,15 @@ void ShutdownOrtProxy() {
 static uint32_t g_RequestedApiVersion = 0;
 
 static BOOL CALLBACK InitializeApiCallback(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *lpContext) {
-    g_OriginalApiBase = g_OriginalOrtGetApiBase();
+    OutputDebugStringA("VDJ-GPU-Proxy: InitializeApiCallback starting\n");
+    
+    if (!g_OriginalApiBase) {
+        OutputDebugStringA("VDJ-GPU-Proxy: g_OriginalApiBase is null, getting it now\n");
+        if (g_OriginalOrtGetApiBase) {
+            g_OriginalApiBase = g_OriginalOrtGetApiBase();
+        }
+    }
+    
     if (!g_OriginalApiBase) {
         OutputDebugStringA("VDJ-GPU-Proxy: Failed to get original API base\n");
         return FALSE;
@@ -154,13 +162,20 @@ static BOOL CALLBACK InitializeApiCallback(PINIT_ONCE InitOnce, PVOID Parameter,
 
     uint32_t version = g_RequestedApiVersion > 0 ? g_RequestedApiVersion : ORT_API_VERSION;
     char msg[128];
-    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Requesting API version %u\n", version);
+    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Requesting API version %u (ORT_API_VERSION=%d)\n", version, ORT_API_VERSION);
     OutputDebugStringA(msg);
 
     g_OriginalApi = g_OriginalApiBase->GetApi(version);
     if (!g_OriginalApi) {
-        OutputDebugStringA("VDJ-GPU-Proxy: Failed to get original API, trying version 1\n");
-        g_OriginalApi = g_OriginalApiBase->GetApi(1);
+        snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: GetApi(%u) returned null, trying lower versions\n", version);
+        OutputDebugStringA(msg);
+        for (uint32_t v = version - 1; v >= 1 && !g_OriginalApi; v--) {
+            g_OriginalApi = g_OriginalApiBase->GetApi(v);
+            if (g_OriginalApi) {
+                snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Got API version %u\n", v);
+                OutputDebugStringA(msg);
+            }
+        }
     }
     
     if (!g_OriginalApi) {
@@ -168,17 +183,35 @@ static BOOL CALLBACK InitializeApiCallback(PINIT_ONCE InitOnce, PVOID Parameter,
         return FALSE;
     }
 
+    OutputDebugStringA("VDJ-GPU-Proxy: Copying API struct and installing hooks\n");
     memcpy(&g_HookedApi, g_OriginalApi, sizeof(OrtApi));
     g_OriginalRun = g_HookedApi.Run;
     g_HookedApi.Run = HookedRun;
 
-    OutputDebugStringA("VDJ-GPU-Proxy: API hooks installed\n");
+    OutputDebugStringA("VDJ-GPU-Proxy: API hooks installed successfully\n");
     return TRUE;
 }
 
 static const OrtApi* ORT_API_CALL HookedGetApi(uint32_t version) noexcept {
+    char msg[128];
+    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: HookedGetApi called with version %u\n", version);
+    OutputDebugStringA(msg);
+    
     g_RequestedApiVersion = version;
-    InitOnceExecuteOnce(&g_InitOnce, InitializeApiCallback, NULL, NULL);
+    BOOL initResult = InitOnceExecuteOnce(&g_InitOnce, InitializeApiCallback, NULL, NULL);
+    
+    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: InitOnceExecuteOnce returned %d, g_OriginalApi=%p\n", 
+             initResult, (void*)g_OriginalApi);
+    OutputDebugStringA(msg);
+    
+    if (!g_OriginalApi) {
+        OutputDebugStringA("VDJ-GPU-Proxy: g_OriginalApi is null, returning original API directly\n");
+        if (g_OriginalApiBase) {
+            return g_OriginalApiBase->GetApi(version);
+        }
+        return nullptr;
+    }
+    
     return &g_HookedApi;
 }
 
