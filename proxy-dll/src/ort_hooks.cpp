@@ -456,3 +456,23 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     OutputDebugStringA("VDJ-GPU-Proxy: Remote inference successful\n");
     return nullptr;
 }
+
+typedef OrtStatusPtr (ORT_API_CALL* PFN_OrtSessionOptionsAppendExecutionProvider_CPU)(
+    OrtSessionOptions* options, int use_arena);
+
+extern "C" ORT_EXPORT OrtStatusPtr ORT_API_CALL OrtSessionOptionsAppendExecutionProvider_CPU(
+    OrtSessionOptions* options, int use_arena) {
+    
+    static PFN_OrtSessionOptionsAppendExecutionProvider_CPU s_RealFunc = nullptr;
+    
+    if (!s_RealFunc && g_hOriginalDll) {
+        s_RealFunc = (PFN_OrtSessionOptionsAppendExecutionProvider_CPU)
+            GetProcAddress(g_hOriginalDll, "OrtSessionOptionsAppendExecutionProvider_CPU");
+    }
+    
+    if (s_RealFunc) {
+        return s_RealFunc(options, use_arena);
+    }
+    
+    return nullptr;
+}

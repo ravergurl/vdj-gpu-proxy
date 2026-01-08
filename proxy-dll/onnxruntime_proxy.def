@@ -1,4 +1,4 @@
 LIBRARY onnxruntime
 EXPORTS
     OrtGetApiBase @1
-    OrtSessionOptionsAppendExecutionProvider_CPU = onnxruntime_real.OrtSessionOptionsAppendExecutionProvider_CPU
+    OrtSessionOptionsAppendExecutionProvider_CPU @2
