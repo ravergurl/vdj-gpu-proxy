@@ -184,7 +184,14 @@ static const OrtApi* ORT_API_CALL HookedGetApi(uint32_t version) noexcept {
 
 // Callback for lazy proxy initialization (called once, outside DllMain context)
 static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *lpContext) {
-    vdj::log::Initialize();
+    OutputDebugStringA("VDJ-GPU-Proxy: InitializeProxyCallback starting\n");
+    
+    __try {
+        vdj::log::Initialize();
+        OutputDebugStringA("VDJ-GPU-Proxy: Logger initialized\n");
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        OutputDebugStringA("VDJ-GPU-Proxy: Exception in logger init\n");
+    }
     
     if (!g_BufferLockInitialized) {
         InitializeCriticalSection(&g_BufferLock);
@@ -192,18 +199,18 @@ static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Paramete
     }
     
     LoadConfig();
+    OutputDebugStringA("VDJ-GPU-Proxy: Config loaded\n");
 
-    // Find original DLL path - look in same directory with _real suffix
     wchar_t modulePath[MAX_PATH];
     GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
 
-    // Replace filename with onnxruntime_real.dll
     wchar_t* lastSlash = wcsrchr(modulePath, L'\\');
     if (lastSlash) {
         size_t remainingSize = (MAX_PATH - (lastSlash - modulePath) - 1);
         wcscpy_s(lastSlash + 1, remainingSize, L"onnxruntime_real.dll");
     }
 
+    OutputDebugStringA("VDJ-GPU-Proxy: Loading real DLL\n");
     g_hOriginalDll = LoadLibraryW(modulePath);
     if (!g_hOriginalDll) {
         g_hOriginalDll = LoadLibraryW(L"onnxruntime_real.dll");
@@ -222,7 +229,7 @@ static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Paramete
         return FALSE;
     }
 
-    OutputDebugStringA("VDJ-GPU-Proxy: Proxy initialized successfully\n");
+    OutputDebugStringA("VDJ-GPU-Proxy: Real DLL loaded successfully\n");
     
     // Connect to GPU server if enabled
     if (g_Config.enabled) {
@@ -259,12 +266,36 @@ static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Paramete
 }
 
 const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
-    // Lazy initialization - runs once on first call (outside DllMain context)
+    OutputDebugStringA("VDJ-GPU-Proxy: OrtGetApiBase called\n");
+    
     InitOnceExecuteOnce(&g_ProxyInitOnce, InitializeProxyCallback, NULL, NULL);
     
     if (!g_ProxyInitialized || !g_OriginalOrtGetApiBase) {
-        // Initialization failed - return nullptr to signal error
-        OutputDebugStringA("VDJ-GPU-Proxy: Proxy not initialized, returning nullptr\n");
+        OutputDebugStringA("VDJ-GPU-Proxy: Init failed, attempting emergency fallback\n");
+        
+        if (!g_hOriginalDll) {
+            wchar_t modulePath[MAX_PATH];
+            GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+            wchar_t* lastSlash = wcsrchr(modulePath, L'\\');
+            if (lastSlash) {
+                wcscpy_s(lastSlash + 1, MAX_PATH - (lastSlash - modulePath) - 1, L"onnxruntime_real.dll");
+            }
+            g_hOriginalDll = LoadLibraryW(modulePath);
+            if (!g_hOriginalDll) {
+                g_hOriginalDll = LoadLibraryW(L"onnxruntime_real.dll");
+            }
+        }
+        
+        if (g_hOriginalDll && !g_OriginalOrtGetApiBase) {
+            g_OriginalOrtGetApiBase = (PFN_OrtGetApiBase)GetProcAddress(g_hOriginalDll, "OrtGetApiBase");
+        }
+        
+        if (g_OriginalOrtGetApiBase) {
+            OutputDebugStringA("VDJ-GPU-Proxy: Emergency fallback succeeded, using real DLL directly\n");
+            return g_OriginalOrtGetApiBase();
+        }
+        
+        OutputDebugStringA("VDJ-GPU-Proxy: Emergency fallback failed, returning nullptr\n");
         return nullptr;
     }
     
@@ -275,6 +306,8 @@ const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
             g_HookedApiBase.GetVersionString = g_OriginalApiBase->GetVersionString;
         }
     }
+    
+    OutputDebugStringA("VDJ-GPU-Proxy: Returning hooked API\n");
     return &g_HookedApiBase;
 }
 
