@@ -227,36 +227,6 @@ static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Paramete
 
     OutputDebugStringA("VDJ-GPU-Proxy: Real DLL loaded successfully\n");
     
-    // Connect to GPU server if enabled
-    if (g_Config.enabled) {
-        vdj::GrpcClient* client = vdj::GetGrpcClient();
-        bool connected = false;
-        
-        if (g_Config.use_tunnel && g_Config.tunnel_url[0] != '\0') {
-            char msg[768];
-            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Connecting via tunnel: %s\n", g_Config.tunnel_url);
-            OutputDebugStringA(msg);
-            connected = client->ConnectWithTunnel(g_Config.tunnel_url);
-        } else if (g_Config.server_address[0] != '\0') {
-            char msg[512];
-            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Connecting to %s:%d\n", g_Config.server_address, g_Config.server_port);
-            OutputDebugStringA(msg);
-            connected = client->Connect(g_Config.server_address, g_Config.server_port);
-        }
-        
-        if (connected) {
-            g_ServerConnected = true;
-            OutputDebugStringA("VDJ-GPU-Proxy: Connected to GPU server\n");
-        } else {
-            g_ServerConnected = false;
-            if (g_Config.fallback_to_local) {
-                OutputDebugStringA("VDJ-GPU-Proxy: Server unavailable, will use local fallback\n");
-            } else {
-                OutputDebugStringA("VDJ-GPU-Proxy: Server unavailable and fallback disabled\n");
-            }
-        }
-    }
-    
     g_ProxyInitialized = true;
     return TRUE;
 }
@@ -307,6 +277,25 @@ const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
     return &g_HookedApiBase;
 }
 
+static void TryConnectToServer() {
+    if (g_ServerConnected) return;
+    if (!g_Config.enabled) return;
+    
+    vdj::GrpcClient* client = vdj::GetGrpcClient();
+    bool connected = false;
+    
+    if (g_Config.use_tunnel && g_Config.tunnel_url[0] != '\0') {
+        OutputDebugStringA("VDJ-GPU-Proxy: Connecting via tunnel...\n");
+        connected = client->ConnectWithTunnel(g_Config.tunnel_url);
+    } else if (g_Config.server_address[0] != '\0') {
+        OutputDebugStringA("VDJ-GPU-Proxy: Connecting to server...\n");
+        connected = client->Connect(g_Config.server_address, g_Config.server_port);
+    }
+    
+    g_ServerConnected = connected;
+    OutputDebugStringA(connected ? "VDJ-GPU-Proxy: Connected!\n" : "VDJ-GPU-Proxy: Connection failed\n");
+}
+
 OrtStatusPtr ORT_API_CALL HookedRun(
     OrtSession* session,
     const OrtRunOptions* run_options,
@@ -317,11 +306,13 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     size_t output_names_len,
     OrtValue** outputs
 ) noexcept {
-    if (!g_Config.enabled || !g_ServerConnected) {
+    if (!g_Config.enabled) {
         return g_OriginalRun(session, run_options, input_names, inputs,
                             input_len, output_names, output_names_len, outputs);
     }
 
+    TryConnectToServer();
+    
     vdj::GrpcClient* client = vdj::GetGrpcClient();
     if (!client->IsConnected()) {
         if (g_Config.fallback_to_local) {
