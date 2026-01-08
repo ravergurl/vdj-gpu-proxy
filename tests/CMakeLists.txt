@@ -15,6 +15,7 @@ target_link_libraries(vdj_proxy_tests PRIVATE
     GTest::gtest_main
     stems_proto
     gRPC::grpc++
+    protobuf::libprotobuf
 )
 
 if(WIN32)

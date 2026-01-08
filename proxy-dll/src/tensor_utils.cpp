@@ -157,6 +157,9 @@ OrtValue* CreateOrtValue(
         api->ReleaseStatus(status);
         free(*out_buffer);
         *out_buffer = nullptr;
+        if (ort_value) {
+            api->ReleaseValue(ort_value);
+        }
         return nullptr;
     }
 

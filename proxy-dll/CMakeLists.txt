@@ -19,6 +19,7 @@ endif()
 target_link_libraries(onnxruntime PRIVATE
     stems_proto
     gRPC::grpc++
+    protobuf::libprotobuf
 )
 
 set_target_properties(onnxruntime PROPERTIES

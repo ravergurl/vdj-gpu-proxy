@@ -14,5 +14,6 @@ protobuf_generate(
     GENERATE_EXTENSIONS .grpc.pb.h .grpc.pb.cc
     PLUGIN "protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
 )
+add_dependencies(stems_proto gRPC::grpc_cpp_plugin)
 
 target_include_directories(stems_proto PUBLIC ${CMAKE_CURRENT_BINARY_DIR})

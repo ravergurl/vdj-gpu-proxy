@@ -5,6 +5,7 @@
 #include "../include/onnxruntime_c_api.h"
 #include <windows.h>
 #include <synchapi.h>
+#include <mutex>
 #include <cstring>
 #include <cstdio>
 #include <vector>
@@ -197,12 +198,6 @@ static const OrtApi* ORT_API_CALL HookedGetApi(uint32_t version) noexcept {
     snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: HookedGetApi called with version %u\n", version);
     OutputDebugStringA(msg);
     
-    // TEMPORARY: Skip all hooks and return original API directly for testing
-    if (g_OriginalApiBase) {
-        OutputDebugStringA("VDJ-GPU-Proxy: Returning ORIGINAL API (bypass mode)\n");
-        return g_OriginalApiBase->GetApi(version);
-    }
-    
     g_RequestedApiVersion = version;
     BOOL initResult = InitOnceExecuteOnce(&g_InitOnce, InitializeApiCallback, NULL, NULL);
     
@@ -333,23 +328,29 @@ const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
     return &g_HookedApiBase;
 }
 
+static std::once_flag g_ConnectOnce;
+
 static void TryConnectToServer() {
     if (g_ServerConnected) return;
     if (!g_Config.enabled) return;
     
-    vdj::GrpcClient* client = vdj::GetGrpcClient();
-    bool connected = false;
-    
-    if (g_Config.use_tunnel && g_Config.tunnel_url[0] != '\0') {
-        OutputDebugStringA("VDJ-GPU-Proxy: Connecting via tunnel...\n");
-        connected = client->ConnectWithTunnel(g_Config.tunnel_url);
-    } else if (g_Config.server_address[0] != '\0') {
-        OutputDebugStringA("VDJ-GPU-Proxy: Connecting to server...\n");
-        connected = client->Connect(g_Config.server_address, g_Config.server_port);
-    }
-    
-    g_ServerConnected = connected;
-    OutputDebugStringA(connected ? "VDJ-GPU-Proxy: Connected!\n" : "VDJ-GPU-Proxy: Connection failed\n");
+    std::call_once(g_ConnectOnce, []() {
+        if (g_ServerConnected) return;
+        
+        vdj::GrpcClient* client = vdj::GetGrpcClient();
+        bool connected = false;
+        
+        if (g_Config.use_tunnel && g_Config.tunnel_url[0] != '\0') {
+            OutputDebugStringA("VDJ-GPU-Proxy: Connecting via tunnel...\n");
+            connected = client->ConnectWithTunnel(g_Config.tunnel_url);
+        } else if (g_Config.server_address[0] != '\0') {
+            OutputDebugStringA("VDJ-GPU-Proxy: Connecting to server...\n");
+            connected = client->Connect(g_Config.server_address, g_Config.server_port);
+        }
+        
+        g_ServerConnected = connected;
+        OutputDebugStringA(connected ? "VDJ-GPU-Proxy: Connected!\n" : "VDJ-GPU-Proxy: Connection failed\n");
+    });
 }
 
 OrtStatusPtr ORT_API_CALL HookedRun(
@@ -375,7 +376,8 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             return g_OriginalRun(session, run_options, input_names, inputs,
                                 input_len, output_names, output_names_len, outputs);
         }
-        return g_OriginalApi->CreateStatus(ORT_FAIL, "GPU server not connected");
+        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "GPU server not connected");
+        return nullptr;
     }
 
     std::vector<std::string> input_name_vec;
@@ -391,7 +393,8 @@ OrtStatusPtr ORT_API_CALL HookedRun(
                 return g_OriginalRun(session, run_options, input_names, inputs,
                                     input_len, output_names, output_names_len, outputs);
             }
-            return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to extract input tensor");
+            if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to extract input tensor");
+            return nullptr;
         }
         input_tensors.push_back(std::move(td));
     }
@@ -416,7 +419,8 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             return g_OriginalRun(session, run_options, input_names, inputs,
                                 input_len, output_names, output_names_len, outputs);
         }
-        return g_OriginalApi->CreateStatus(ORT_FAIL, result.error_message.c_str());
+        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, result.error_message.c_str());
+        return nullptr;
     }
 
     if (result.outputs.size() != output_names_len) {
@@ -425,7 +429,8 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             return g_OriginalRun(session, run_options, input_names, inputs,
                                 input_len, output_names, output_names_len, outputs);
         }
-        return g_OriginalApi->CreateStatus(ORT_FAIL, "Output count mismatch from server");
+        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Output count mismatch from server");
+        return nullptr;
     }
 
     for (size_t i = 0; i < output_names_len; i++) {
@@ -443,7 +448,8 @@ OrtStatusPtr ORT_API_CALL HookedRun(
                 return g_OriginalRun(session, run_options, input_names, inputs,
                                     input_len, output_names, output_names_len, outputs);
             }
-            return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to create output tensor");
+            if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to create output tensor");
+            return nullptr;
         }
         outputs[i] = ort_value;
         if (buffer && g_BufferLockInitialized) {
