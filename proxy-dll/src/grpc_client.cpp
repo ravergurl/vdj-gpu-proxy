@@ -3,11 +3,12 @@
 #include "stems.grpc.pb.h"
 #include <mutex>
 #include <chrono>
+#include <regex>
 
 namespace vdj {
 
 namespace {
-    constexpr size_t MAX_MESSAGE_SIZE = 100 * 1024 * 1024;  // 100MB
+    constexpr size_t MAX_MESSAGE_SIZE = 100 * 1024 * 1024;
     constexpr int CONNECT_TIMEOUT_SECONDS = 5;
     constexpr int INFERENCE_TIMEOUT_SECONDS = 30;
 }
@@ -18,6 +19,7 @@ public:
     std::shared_ptr<grpc::Channel> channel;
     mutable std::mutex mutex;
     bool connected = false;
+    bool using_ssl = false;
 };
 
 GrpcClient::GrpcClient() : impl_(std::make_unique<Impl>()) {}
@@ -29,7 +31,7 @@ bool GrpcClient::Connect(const std::string& address, uint16_t port) {
     std::string target = address + ":" + std::to_string(port);
 
     grpc::ChannelArguments args;
-    args.SetMaxReceiveMessageSize(MAX_MESSAGE_SIZE); // 100MB for large tensors
+    args.SetMaxReceiveMessageSize(MAX_MESSAGE_SIZE);
     args.SetMaxSendMessageSize(MAX_MESSAGE_SIZE);
 
     impl_->channel = grpc::CreateCustomChannel(
@@ -37,10 +39,48 @@ bool GrpcClient::Connect(const std::string& address, uint16_t port) {
         grpc::InsecureChannelCredentials(),
         args
     );
+    impl_->using_ssl = false;
 
     impl_->stub = stems::StemsInference::NewStub(impl_->channel);
 
-    // Test connection
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(CONNECT_TIMEOUT_SECONDS));
+
+    stems::Empty request;
+    stems::ServerInfo response;
+
+    grpc::Status status = impl_->stub->GetServerInfo(&context, request, &response);
+
+    impl_->connected = status.ok() && response.ready();
+    return impl_->connected;
+}
+
+bool GrpcClient::ConnectWithTunnel(const std::string& tunnel_url) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+
+    std::regex url_regex(R"(https://([a-zA-Z0-9-]+\.trycloudflare\.com))");
+    std::smatch match;
+    
+    if (!std::regex_search(tunnel_url, match, url_regex) || match.size() < 2) {
+        return false;
+    }
+    
+    std::string hostname = match[1].str();
+    std::string target = hostname + ":443";
+
+    grpc::ChannelArguments args;
+    args.SetMaxReceiveMessageSize(MAX_MESSAGE_SIZE);
+    args.SetMaxSendMessageSize(MAX_MESSAGE_SIZE);
+    args.SetSslTargetNameOverride(hostname);
+
+    grpc::SslCredentialsOptions ssl_opts;
+    auto creds = grpc::SslCredentials(ssl_opts);
+
+    impl_->channel = grpc::CreateCustomChannel(target, creds, args);
+    impl_->using_ssl = true;
+
+    impl_->stub = stems::StemsInference::NewStub(impl_->channel);
+
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(CONNECT_TIMEOUT_SECONDS));
 
@@ -86,7 +126,6 @@ InferenceResult GrpcClient::RunInference(
         return result;
     }
 
-    // Build request
     stems::InferenceRequest request;
     request.set_session_id(session_id);
 
@@ -107,7 +146,6 @@ InferenceResult GrpcClient::RunInference(
         request.add_output_names(name);
     }
 
-    // Call server
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(INFERENCE_TIMEOUT_SECONDS));
 
@@ -124,7 +162,6 @@ InferenceResult GrpcClient::RunInference(
         return result;
     }
 
-    // Extract outputs
     for (const auto& tensor : response.outputs()) {
         TensorData td;
         for (int i = 0; i < tensor.shape().dims_size(); i++) {
@@ -140,7 +177,6 @@ InferenceResult GrpcClient::RunInference(
     return result;
 }
 
-// Global instance
 static std::unique_ptr<GrpcClient> g_client;
 static std::once_flag g_client_init;
 

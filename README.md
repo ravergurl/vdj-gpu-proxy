@@ -28,23 +28,45 @@ The proxy DLL intercepts VirtualDJ's ONNX Runtime inference calls and forwards t
 
 ## Quick Start
 
-### Option 1: One-Click Setup
+### Easiest: Cloudflare Tunnel (No Port Forwarding Needed)
 
-**Windows (Local PC):**
-```powershell
-git clone https://github.com/ravergurl/vdj-gpu-proxy.git
-cd vdj-gpu-proxy
-.\scripts\setup-windows.ps1
-```
-
-**Linux (GPU Server):**
+**1. On GPU Server (Linux):**
 ```bash
 git clone https://github.com/ravergurl/vdj-gpu-proxy.git
 cd vdj-gpu-proxy
-./scripts/setup-server.sh
+sudo python scripts/deploy.py install --tunnel
+sudo python scripts/deploy.py start --tunnel
 ```
 
-### Option 2: Manual Setup
+Copy the tunnel URL displayed (looks like `https://random-words.trycloudflare.com`)
+
+**2. On Windows PC:**
+```powershell
+# Download proxy DLL from GitHub releases or build from source
+.\scripts\install_proxy.ps1
+
+# Run the config tool and paste your tunnel URL
+python scripts/vdj-proxy-ctl.py
+```
+
+**3. Launch VirtualDJ** - stems now run on your GPU!
+
+### Alternative: Direct Connection (LAN)
+
+**GPU Server:**
+```bash
+sudo python scripts/deploy.py install
+sudo python scripts/deploy.py start
+sudo ufw allow 50051/tcp
+```
+
+**Windows:**
+```powershell
+python scripts/vdj-proxy-ctl.py
+# Enter the server IP when prompted, or edit registry directly
+```
+
+### Manual Setup
 
 #### 1. Setup GPU Server (Linux)
 
@@ -87,27 +109,19 @@ Stems separation now runs on your remote GPU!
 
 ## CLI Tools
 
-### Windows Control Tool (vdj-proxy-ctl.ps1)
+### Windows Control Tool (vdj-proxy-ctl.py)
 
-Manage the proxy from the command line:
+Interactive tool to configure the proxy. Just run it and paste your tunnel URL:
 
 ```powershell
-# Check status
-.\scripts\vdj-proxy-ctl.ps1 status
-
-# Enable/disable proxy
-.\scripts\vdj-proxy-ctl.ps1 enable
-.\scripts\vdj-proxy-ctl.ps1 disable
-
-# Configure server
-.\scripts\vdj-proxy-ctl.ps1 config -ServerAddress 192.168.1.100 -ServerPort 50051
-
-# Test connection
-.\scripts\vdj-proxy-ctl.ps1 test
-
-# View logs
-.\scripts\vdj-proxy-ctl.ps1 logs
+python scripts/vdj-proxy-ctl.py
 ```
+
+The tool will:
+1. Show current configuration status
+2. Prompt for tunnel URL (or test existing one)
+3. Verify connection to server
+4. Enable the proxy automatically
 
 ### Server CLI Tools (Linux/GPU Server)
 
@@ -131,9 +145,12 @@ Settings are stored at `HKCU:\Software\VDJ-GPU-Proxy`:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `ServerAddress` | String | `127.0.0.1` | GPU server IP/hostname |
+| `TunnelUrl` | String | (empty) | Cloudflare tunnel URL (preferred) |
+| `ServerAddress` | String | `127.0.0.1` | GPU server IP/hostname (direct mode) |
 | `ServerPort` | DWORD | `50051` | gRPC port |
 | `Enabled` | DWORD | `1` | 1=enabled, 0=disabled (fallback to local) |
+
+When `TunnelUrl` is set, it takes priority over `ServerAddress`.
 
 ### Environment Variables (Server)
 
@@ -197,20 +214,14 @@ vdj-stems-server -v --host 0.0.0.0 --port 50051
 2. **Check VirtualDJ version:**
    - Must be VirtualDJ 2023+ that uses `onnxruntime.dll`
 
-3. **Check logs:**
-   ```powershell
-   .\scripts\vdj-proxy-ctl.ps1 logs
-   ```
+3. **Check logs:** Look in `%LOCALAPPDATA%\VDJ-GPU-Proxy\`
 
 4. **Use DebugView (SysInternals):**
    - Filter for `VDJ-GPU-Proxy` to see debug output
 
 ### Connection errors
 
-1. **Test connectivity:**
-   ```powershell
-   .\scripts\vdj-proxy-ctl.ps1 test
-   ```
+1. **Test connectivity:** Run `python scripts/vdj-proxy-ctl.py` and press Enter to test
 
 2. **Check server is running:**
    ```bash
@@ -324,7 +335,7 @@ vdj-gpu-proxy/
 |   +-- src/
 |       +-- dllmain.cpp     # DLL entry point
 |       +-- ort_hooks.cpp   # ONNX Runtime hooks
-|       +-- grpc_client.cpp # gRPC client
+|       +-- grpc_client.cpp # gRPC client (supports SSL for tunnels)
 |       +-- tensor_utils.cpp
 |       +-- logger.cpp      # File logging
 +-- server/                 # GPU Server (Python)
@@ -337,9 +348,8 @@ vdj-gpu-proxy/
 +-- proto/                  # gRPC definitions
 |   +-- stems.proto
 +-- scripts/
-|   +-- setup-windows.ps1   # Windows one-click setup
-|   +-- setup-server.sh     # Linux one-click setup
-|   +-- vdj-proxy-ctl.ps1   # Windows CLI tool
+|   +-- deploy.py           # Linux server deploy with Cloudflare tunnel
+|   +-- vdj-proxy-ctl.py    # Windows config tool (interactive)
 |   +-- install_proxy.ps1   # Install DLL to VDJ
 |   +-- generate_proto.py   # Proto generation
 +-- tests/                  # C++ tests (Google Test)

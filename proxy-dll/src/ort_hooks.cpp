@@ -20,12 +20,16 @@ static const OrtApiBase* g_OriginalApiBase = nullptr;
 static const OrtApi* g_OriginalApi = nullptr;
 static OrtApi g_HookedApi;
 static OrtApiBase g_HookedApiBase;
-static ProxyConfig g_Config = {
-    "127.0.0.1",
-    50051,
-    true,
-    true
-};
+static ProxyConfig g_Config = {};
+
+static void InitDefaultConfig() {
+    strcpy_s(g_Config.server_address, "127.0.0.1");
+    g_Config.tunnel_url[0] = '\0';
+    g_Config.server_port = 50051;
+    g_Config.fallback_to_local = true;
+    g_Config.enabled = true;
+    g_Config.use_tunnel = false;
+}
 
 // Connection state
 static std::atomic<bool> g_ServerConnected{false};
@@ -72,30 +76,38 @@ ProxyConfig* GetProxyConfig() {
 }
 
 static void LoadConfig() {
-    // Load from registry or config file
-    // HKEY_CURRENT_USER\Software\VDJ-GPU-Proxy
+    InitDefaultConfig();
+    
     HKEY hKey;
-    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\VDJ-GPU-Proxy", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-        DWORD size = sizeof(g_Config.server_address);
-        LONG result = RegQueryValueExA(hKey, "ServerAddress", nullptr, nullptr, (LPBYTE)g_Config.server_address, &size);
-        if (result != ERROR_SUCCESS || size == 0) {
-            g_Config.server_address[0] = '\0';  // Clear on error
-        }
-
-        DWORD port = 0;
-        size = sizeof(port);
-        if (RegQueryValueExA(hKey, "ServerPort", nullptr, nullptr, (LPBYTE)&port, &size) == ERROR_SUCCESS) {
-            g_Config.server_port = (uint16_t)port;
-        }
-
-        DWORD enabled = 1;
-        size = sizeof(enabled);
-        if (RegQueryValueExA(hKey, "Enabled", nullptr, nullptr, (LPBYTE)&enabled, &size) == ERROR_SUCCESS) {
-            g_Config.enabled = (enabled != 0);
-        }
-
-        RegCloseKey(hKey);
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\VDJ-GPU-Proxy", 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
+        return;
     }
+
+    DWORD size = sizeof(g_Config.tunnel_url);
+    LONG result = RegQueryValueExA(hKey, "TunnelUrl", nullptr, nullptr, (LPBYTE)g_Config.tunnel_url, &size);
+    if (result == ERROR_SUCCESS && size > 1 && g_Config.tunnel_url[0] != '\0') {
+        g_Config.use_tunnel = true;
+    }
+
+    size = sizeof(g_Config.server_address);
+    result = RegQueryValueExA(hKey, "ServerAddress", nullptr, nullptr, (LPBYTE)g_Config.server_address, &size);
+    if (result != ERROR_SUCCESS || size == 0) {
+        g_Config.server_address[0] = '\0';
+    }
+
+    DWORD port = 0;
+    size = sizeof(port);
+    if (RegQueryValueExA(hKey, "ServerPort", nullptr, nullptr, (LPBYTE)&port, &size) == ERROR_SUCCESS) {
+        g_Config.server_port = (uint16_t)port;
+    }
+
+    DWORD enabled = 1;
+    size = sizeof(enabled);
+    if (RegQueryValueExA(hKey, "Enabled", nullptr, nullptr, (LPBYTE)&enabled, &size) == ERROR_SUCCESS) {
+        g_Config.enabled = (enabled != 0);
+    }
+
+    RegCloseKey(hKey);
 }
 
 bool InitializeOrtProxy() {
@@ -142,7 +154,21 @@ bool InitializeOrtProxy() {
     
     if (g_Config.enabled) {
         vdj::GrpcClient* client = vdj::GetGrpcClient();
-        if (client->Connect(g_Config.server_address, g_Config.server_port)) {
+        bool connected = false;
+        
+        if (g_Config.use_tunnel && g_Config.tunnel_url[0] != '\0') {
+            char msg[768];
+            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Connecting via tunnel: %s\n", g_Config.tunnel_url);
+            OutputDebugStringA(msg);
+            connected = client->ConnectWithTunnel(g_Config.tunnel_url);
+        } else if (g_Config.server_address[0] != '\0') {
+            char msg[512];
+            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Connecting to %s:%d\n", g_Config.server_address, g_Config.server_port);
+            OutputDebugStringA(msg);
+            connected = client->Connect(g_Config.server_address, g_Config.server_port);
+        }
+        
+        if (connected) {
             g_ServerConnected = true;
             OutputDebugStringA("VDJ-GPU-Proxy: Connected to GPU server\n");
         } else {

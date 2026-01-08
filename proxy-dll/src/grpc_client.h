@@ -25,6 +25,7 @@ public:
     ~GrpcClient();
 
     bool Connect(const std::string& address, uint16_t port);
+    bool ConnectWithTunnel(const std::string& tunnel_url);
     void Disconnect();
     bool IsConnected() const;
 
@@ -40,7 +41,6 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Global client instance
 GrpcClient* GetGrpcClient();
 
 } // namespace vdj
