@@ -12,16 +12,12 @@ def main():
     parser.add_argument("--port", type=int, default=50051, help="Port to listen on")
     parser.add_argument("--workers", type=int, default=10, help="Max gRPC workers")
     parser.add_argument("--model", default="htdemucs", help="Demucs model name")
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Enable verbose logging"
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
 
     args = parser.parse_args()
 
     level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     logger = logging.getLogger(__name__)
 
@@ -31,6 +27,15 @@ def main():
 
     if args.workers <= 0:
         logger.error(f"Invalid workers count: {args.workers}")
+        sys.exit(1)
+
+    logger.info("Pre-loading Demucs engine...")
+    try:
+        from .inference import get_engine
+
+        get_engine(model_name=args.model)
+    except Exception as e:
+        logger.error(f"Failed to initialize engine: {e}")
         sys.exit(1)
 
     server = serve(host=args.host, port=args.port, max_workers=args.workers)

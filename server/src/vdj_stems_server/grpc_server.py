@@ -37,7 +37,7 @@ class StemsInferenceServicer(stems_pb2_grpc.StemsInferenceServicer):
                 return stems_pb2.InferenceResponse(
                     session_id=request.session_id,
                     status=1,
-                    error_message="Invalid tensor shape",
+                    error_message=f"Invalid tensor shape: {shape}",
                 )
 
             stems_bytes, out_shape = self.engine.separate_tensor(
@@ -56,19 +56,35 @@ class StemsInferenceServicer(stems_pb2_grpc.StemsInferenceServicer):
                             data=stems_bytes[name],
                         )
                     )
+                else:
+                    logger.warning(f"Requested stem '{name}' not found in model output")
+
+            if not outputs:
+                return stems_pb2.InferenceResponse(
+                    session_id=request.session_id,
+                    status=1,
+                    error_message="No output stems generated",
+                )
 
             return stems_pb2.InferenceResponse(
                 session_id=request.session_id, status=0, outputs=outputs
             )
-        except (ValueError, IndexError) as e:
-            logger.warning(f"Invalid input: {e}")
+        except ValueError as e:
+            logger.warning(f"Invalid input for session {request.session_id}: {e}")
             return stems_pb2.InferenceResponse(
                 session_id=request.session_id,
-                status=1,
-                error_message=f"Invalid input: {e}",
+                status=400,
+                error_message=str(e),
+            )
+        except RuntimeError as e:
+            logger.error(f"Inference runtime error for session {request.session_id}: {e}")
+            return stems_pb2.InferenceResponse(
+                session_id=request.session_id,
+                status=500,
+                error_message=str(e),
             )
         except Exception as e:
-            logger.exception(f"Inference error for session {request.session_id}")
+            logger.exception(f"Unexpected error for session {request.session_id}")
             return stems_pb2.InferenceResponse(
                 session_id=request.session_id, status=1, error_message=str(e)
             )
@@ -105,9 +121,7 @@ def serve(host="0.0.0.0", port=50051, max_workers=10):
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),
         ],
     )
-    stems_pb2_grpc.add_StemsInferenceServicer_to_server(
-        StemsInferenceServicer(), server
-    )
+    stems_pb2_grpc.add_StemsInferenceServicer_to_server(StemsInferenceServicer(), server)
     server.add_insecure_port(f"{host}:{port}")
     server.start()
     return server
