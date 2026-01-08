@@ -5,6 +5,7 @@ src/vdj_stems_server/grpc_server.py
 src/vdj_stems_server/inference.py
 src/vdj_stems_server/main.py
 src/vdj_stems_server/stems_pb2.py
+src/vdj_stems_server/stems_pb2.pyi
 src/vdj_stems_server/stems_pb2_grpc.py
 src/vdj_stems_server.egg-info/PKG-INFO
 src/vdj_stems_server.egg-info/SOURCES.txt

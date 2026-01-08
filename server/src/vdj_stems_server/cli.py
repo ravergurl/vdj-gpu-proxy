@@ -13,15 +13,23 @@ except ImportError:
     stems_pb2_grpc = None
 
 
-def create_channel(host: str, port: int, timeout: float = 5.0) -> Optional[grpc.Channel]:
+def create_channel(
+    host: str, port: int, timeout: float = 5.0, use_ssl: bool = False
+) -> Optional[grpc.Channel]:
     target = f"{host}:{port}"
-    channel = grpc.insecure_channel(
-        target,
-        options=[
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),
-        ],
-    )
+    options = [
+        ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+        ("grpc.max_send_message_length", 100 * 1024 * 1024),
+    ]
+
+    if use_ssl or port == 443:
+        # Use SSL for HTTPS tunnels (port 443) or when explicitly requested
+        credentials = grpc.ssl_channel_credentials()
+        channel = grpc.secure_channel(target, credentials, options=options)
+    else:
+        # Use insecure channel for local connections
+        channel = grpc.insecure_channel(target, options=options)
+
     try:
         grpc.channel_ready_future(channel).result(timeout=timeout)
         return channel
