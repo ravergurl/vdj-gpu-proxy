@@ -42,6 +42,10 @@ static bool g_BufferLockInitialized = false;
 
 // Thread safety for API initialization
 static INIT_ONCE g_InitOnce = INIT_ONCE_STATIC_INIT;
+static INIT_ONCE g_ProxyInitOnce = INIT_ONCE_STATIC_INIT;
+static bool g_ProxyInitialized = false;
+
+static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *lpContext);
 
 // Function pointer types
 typedef const OrtApiBase* (ORT_API_CALL* PFN_OrtGetApiBase)(void);
@@ -111,77 +115,8 @@ static void LoadConfig() {
 }
 
 bool InitializeOrtProxy() {
-    vdj::log::Initialize();
-    
-    if (!g_BufferLockInitialized) {
-        InitializeCriticalSection(&g_BufferLock);
-        g_BufferLockInitialized = true;
-    }
-    
-    LoadConfig();
-
-    // Find original DLL path - look in same directory with _real suffix
-    wchar_t modulePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
-
-    // Replace filename with onnxruntime_real.dll
-    wchar_t* lastSlash = wcsrchr(modulePath, L'\\');
-    if (lastSlash) {
-        // Calculate remaining buffer size to prevent buffer overflow
-        size_t remainingSize = (MAX_PATH - (lastSlash - modulePath) - 1);
-        wcscpy_s(lastSlash + 1, remainingSize, L"onnxruntime_real.dll");
-    }
-
-    g_hOriginalDll = LoadLibraryW(modulePath);
-    if (!g_hOriginalDll) {
-        // Try system path
-        g_hOriginalDll = LoadLibraryW(L"onnxruntime_real.dll");
-    }
-
-    if (!g_hOriginalDll) {
-        OutputDebugStringA("VDJ-GPU-Proxy: Failed to load onnxruntime_real.dll\n");
-        return false;
-    }
-
-    g_OriginalOrtGetApiBase = (PFN_OrtGetApiBase)GetProcAddress(g_hOriginalDll, "OrtGetApiBase");
-    if (!g_OriginalOrtGetApiBase) {
-        OutputDebugStringA("VDJ-GPU-Proxy: Failed to find OrtGetApiBase\n");
-        FreeLibrary(g_hOriginalDll);
-        return false;
-    }
-
-    OutputDebugStringA("VDJ-GPU-Proxy: Initialized successfully\n");
-    
-    if (g_Config.enabled) {
-        vdj::GrpcClient* client = vdj::GetGrpcClient();
-        bool connected = false;
-        
-        if (g_Config.use_tunnel && g_Config.tunnel_url[0] != '\0') {
-            char msg[768];
-            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Connecting via tunnel: %s\n", g_Config.tunnel_url);
-            OutputDebugStringA(msg);
-            connected = client->ConnectWithTunnel(g_Config.tunnel_url);
-        } else if (g_Config.server_address[0] != '\0') {
-            char msg[512];
-            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Connecting to %s:%d\n", g_Config.server_address, g_Config.server_port);
-            OutputDebugStringA(msg);
-            connected = client->Connect(g_Config.server_address, g_Config.server_port);
-        }
-        
-        if (connected) {
-            g_ServerConnected = true;
-            OutputDebugStringA("VDJ-GPU-Proxy: Connected to GPU server\n");
-        } else {
-            g_ServerConnected = false;
-            if (g_Config.fallback_to_local) {
-                OutputDebugStringA("VDJ-GPU-Proxy: Server unavailable, will use local fallback\n");
-            } else {
-                OutputDebugStringA("VDJ-GPU-Proxy: Server unavailable and fallback disabled\n");
-            }
-        }
-    }
-    
-    return true;
+    InitOnceExecuteOnce(&g_ProxyInitOnce, InitializeProxyCallback, NULL, NULL);
+    return g_ProxyInitialized;
 }
 
 void ShutdownOrtProxy() {
@@ -247,12 +182,98 @@ static const OrtApi* ORT_API_CALL HookedGetApi(uint32_t version) noexcept {
     return &g_HookedApi;
 }
 
-const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
-    if (g_OriginalApiBase == nullptr && g_OriginalOrtGetApiBase) {
-        g_OriginalApiBase = g_OriginalOrtGetApiBase();
+// Callback for lazy proxy initialization (called once, outside DllMain context)
+static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *lpContext) {
+    vdj::log::Initialize();
+    
+    if (!g_BufferLockInitialized) {
+        InitializeCriticalSection(&g_BufferLock);
+        g_BufferLockInitialized = true;
+    }
+    
+    LoadConfig();
 
-        g_HookedApiBase.GetApi = HookedGetApi;
-        g_HookedApiBase.GetVersionString = g_OriginalApiBase->GetVersionString;
+    // Find original DLL path - look in same directory with _real suffix
+    wchar_t modulePath[MAX_PATH];
+    GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+
+    // Replace filename with onnxruntime_real.dll
+    wchar_t* lastSlash = wcsrchr(modulePath, L'\\');
+    if (lastSlash) {
+        size_t remainingSize = (MAX_PATH - (lastSlash - modulePath) - 1);
+        wcscpy_s(lastSlash + 1, remainingSize, L"onnxruntime_real.dll");
+    }
+
+    g_hOriginalDll = LoadLibraryW(modulePath);
+    if (!g_hOriginalDll) {
+        g_hOriginalDll = LoadLibraryW(L"onnxruntime_real.dll");
+    }
+
+    if (!g_hOriginalDll) {
+        OutputDebugStringA("VDJ-GPU-Proxy: Failed to load onnxruntime_real.dll\n");
+        return FALSE;
+    }
+
+    g_OriginalOrtGetApiBase = (PFN_OrtGetApiBase)GetProcAddress(g_hOriginalDll, "OrtGetApiBase");
+    if (!g_OriginalOrtGetApiBase) {
+        OutputDebugStringA("VDJ-GPU-Proxy: Failed to find OrtGetApiBase\n");
+        FreeLibrary(g_hOriginalDll);
+        g_hOriginalDll = nullptr;
+        return FALSE;
+    }
+
+    OutputDebugStringA("VDJ-GPU-Proxy: Proxy initialized successfully\n");
+    
+    // Connect to GPU server if enabled
+    if (g_Config.enabled) {
+        vdj::GrpcClient* client = vdj::GetGrpcClient();
+        bool connected = false;
+        
+        if (g_Config.use_tunnel && g_Config.tunnel_url[0] != '\0') {
+            char msg[768];
+            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Connecting via tunnel: %s\n", g_Config.tunnel_url);
+            OutputDebugStringA(msg);
+            connected = client->ConnectWithTunnel(g_Config.tunnel_url);
+        } else if (g_Config.server_address[0] != '\0') {
+            char msg[512];
+            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Connecting to %s:%d\n", g_Config.server_address, g_Config.server_port);
+            OutputDebugStringA(msg);
+            connected = client->Connect(g_Config.server_address, g_Config.server_port);
+        }
+        
+        if (connected) {
+            g_ServerConnected = true;
+            OutputDebugStringA("VDJ-GPU-Proxy: Connected to GPU server\n");
+        } else {
+            g_ServerConnected = false;
+            if (g_Config.fallback_to_local) {
+                OutputDebugStringA("VDJ-GPU-Proxy: Server unavailable, will use local fallback\n");
+            } else {
+                OutputDebugStringA("VDJ-GPU-Proxy: Server unavailable and fallback disabled\n");
+            }
+        }
+    }
+    
+    g_ProxyInitialized = true;
+    return TRUE;
+}
+
+const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
+    // Lazy initialization - runs once on first call (outside DllMain context)
+    InitOnceExecuteOnce(&g_ProxyInitOnce, InitializeProxyCallback, NULL, NULL);
+    
+    if (!g_ProxyInitialized || !g_OriginalOrtGetApiBase) {
+        // Initialization failed - return nullptr to signal error
+        OutputDebugStringA("VDJ-GPU-Proxy: Proxy not initialized, returning nullptr\n");
+        return nullptr;
+    }
+    
+    if (g_OriginalApiBase == nullptr) {
+        g_OriginalApiBase = g_OriginalOrtGetApiBase();
+        if (g_OriginalApiBase) {
+            g_HookedApiBase.GetApi = HookedGetApi;
+            g_HookedApiBase.GetVersionString = g_OriginalApiBase->GetVersionString;
+        }
     }
     return &g_HookedApiBase;
 }

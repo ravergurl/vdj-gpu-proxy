@@ -2,16 +2,22 @@
 #include <windows.h>
 #include "ort_hooks.h"
 
+static HINSTANCE g_hInstance = nullptr;
+
+HINSTANCE GetProxyInstance() {
+    return g_hInstance;
+}
+
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved) {
     switch (fdwReason) {
         case DLL_PROCESS_ATTACH:
+            g_hInstance = hinstDLL;
             DisableThreadLibraryCalls(hinstDLL);
-            if (!InitializeOrtProxy()) {
-                return FALSE;
-            }
             break;
         case DLL_PROCESS_DETACH:
-            ShutdownOrtProxy();
+            if (lpReserved == nullptr) {
+                ShutdownOrtProxy();
+            }
             break;
     }
     return TRUE;
