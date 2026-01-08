@@ -196,7 +196,14 @@ static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Paramete
     OutputDebugStringA("VDJ-GPU-Proxy: Config loaded\n");
 
     wchar_t modulePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+    HMODULE hSelf = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)InitializeProxyCallback, &hSelf);
+    if (hSelf) {
+        GetModuleFileNameW(hSelf, modulePath, MAX_PATH);
+    } else {
+        GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+    }
 
     wchar_t* lastSlash = wcsrchr(modulePath, L'\\');
     if (lastSlash) {
@@ -204,7 +211,12 @@ static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Paramete
         wcscpy_s(lastSlash + 1, remainingSize, L"onnxruntime_real.dll");
     }
 
-    OutputDebugStringA("VDJ-GPU-Proxy: Loading real DLL\n");
+    char pathMsg[1024];
+    WideCharToMultiByte(CP_UTF8, 0, modulePath, -1, pathMsg, sizeof(pathMsg), NULL, NULL);
+    OutputDebugStringA("VDJ-GPU-Proxy: Loading real DLL from: ");
+    OutputDebugStringA(pathMsg);
+    OutputDebugStringA("\n");
+    
     g_hOriginalDll = LoadLibraryW(modulePath);
     if (!g_hOriginalDll) {
         g_hOriginalDll = LoadLibraryW(L"onnxruntime_real.dll");
@@ -239,7 +251,14 @@ const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
         
         if (!g_hOriginalDll) {
             wchar_t modulePath[MAX_PATH];
-            GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+            HMODULE hSelf = nullptr;
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCWSTR)OrtGetApiBase, &hSelf);
+            if (hSelf) {
+                GetModuleFileNameW(hSelf, modulePath, MAX_PATH);
+            } else {
+                GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+            }
             wchar_t* lastSlash = wcsrchr(modulePath, L'\\');
             if (lastSlash) {
                 wcscpy_s(lastSlash + 1, MAX_PATH - (lastSlash - modulePath) - 1, L"onnxruntime_real.dll");
