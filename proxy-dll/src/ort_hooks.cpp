@@ -186,13 +186,11 @@ static const OrtApi* ORT_API_CALL HookedGetApi(uint32_t version) noexcept {
 static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *lpContext) {
     OutputDebugStringA("VDJ-GPU-Proxy: InitializeProxyCallback starting\n");
     
-    vdj::log::Initialize();
-    OutputDebugStringA("VDJ-GPU-Proxy: Logger initialized\n");
-    
     if (!g_BufferLockInitialized) {
         InitializeCriticalSection(&g_BufferLock);
         g_BufferLockInitialized = true;
     }
+    OutputDebugStringA("VDJ-GPU-Proxy: CritSec initialized\n");
     
     LoadConfig();
     OutputDebugStringA("VDJ-GPU-Proxy: Config loaded\n");
