@@ -208,35 +208,41 @@ void ShutdownOrtProxy() {
     }
 }
 
+static uint32_t g_RequestedApiVersion = 0;
+
 static BOOL CALLBACK InitializeApiCallback(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *lpContext) {
-    // Get the original API base
     g_OriginalApiBase = g_OriginalOrtGetApiBase();
     if (!g_OriginalApiBase) {
         OutputDebugStringA("VDJ-GPU-Proxy: Failed to get original API base\n");
         return FALSE;
     }
 
-    // Get API version 1
-    g_OriginalApi = g_OriginalApiBase->GetApi(1);
+    uint32_t version = g_RequestedApiVersion > 0 ? g_RequestedApiVersion : ORT_API_VERSION;
+    char msg[128];
+    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Requesting API version %u\n", version);
+    OutputDebugStringA(msg);
+
+    g_OriginalApi = g_OriginalApiBase->GetApi(version);
     if (!g_OriginalApi) {
-        OutputDebugStringA("VDJ-GPU-Proxy: Failed to get original API\n");
+        OutputDebugStringA("VDJ-GPU-Proxy: Failed to get original API, trying version 1\n");
+        g_OriginalApi = g_OriginalApiBase->GetApi(1);
+    }
+    
+    if (!g_OriginalApi) {
+        OutputDebugStringA("VDJ-GPU-Proxy: Failed to get any API version\n");
         return FALSE;
     }
 
-    // Copy entire function table
     memcpy(&g_HookedApi, g_OriginalApi, sizeof(OrtApi));
-
-    // Save original Run pointer from struct member (safe direct access)
     g_OriginalRun = g_HookedApi.Run;
-
-    // Replace Run with our hook
     g_HookedApi.Run = HookedRun;
 
+    OutputDebugStringA("VDJ-GPU-Proxy: API hooks installed\n");
     return TRUE;
 }
 
 static const OrtApi* ORT_API_CALL HookedGetApi(uint32_t version) noexcept {
-    // Thread-safe one-time initialization
+    g_RequestedApiVersion = version;
     InitOnceExecuteOnce(&g_InitOnce, InitializeApiCallback, NULL, NULL);
     return &g_HookedApi;
 }
