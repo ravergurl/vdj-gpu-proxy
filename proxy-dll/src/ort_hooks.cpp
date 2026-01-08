@@ -197,6 +197,12 @@ static const OrtApi* ORT_API_CALL HookedGetApi(uint32_t version) noexcept {
     snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: HookedGetApi called with version %u\n", version);
     OutputDebugStringA(msg);
     
+    // TEMPORARY: Skip all hooks and return original API directly for testing
+    if (g_OriginalApiBase) {
+        OutputDebugStringA("VDJ-GPU-Proxy: Returning ORIGINAL API (bypass mode)\n");
+        return g_OriginalApiBase->GetApi(version);
+    }
+    
     g_RequestedApiVersion = version;
     BOOL initResult = InitOnceExecuteOnce(&g_InitOnce, InitializeApiCallback, NULL, NULL);
     
