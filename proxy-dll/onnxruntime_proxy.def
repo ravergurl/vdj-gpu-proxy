@@ -1,6 +1,6 @@
-LIBRARY ml1151
+LIBRARY onnxruntime
 EXPORTS
     OrtGetApiBase @1
-    OrtSessionOptionsAppendExecutionProvider_CPU @2
-    OrtSessionOptionsAppendExecutionProvider_DML @3
-    OrtSessionOptionsAppendExecutionProviderEx_DML @4
+    OrtSessionOptionsAppendExecutionProviderEx_DML @2
+    OrtSessionOptionsAppendExecutionProvider_CPU @3
+    OrtSessionOptionsAppendExecutionProvider_DML @4
