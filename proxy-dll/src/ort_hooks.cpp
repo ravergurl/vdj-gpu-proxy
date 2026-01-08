@@ -242,7 +242,7 @@ static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Paramete
     wchar_t* lastSlash = wcsrchr(modulePath, L'\\');
     if (lastSlash) {
         size_t remainingSize = (MAX_PATH - (lastSlash - modulePath) - 1);
-        wcscpy_s(lastSlash + 1, remainingSize, L"onnxruntime_real.dll");
+        wcscpy_s(lastSlash + 1, remainingSize, L"ml1151_real.dll");
     }
 
     char pathMsg[1024];
@@ -253,11 +253,11 @@ static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Paramete
     
     g_hOriginalDll = LoadLibraryW(modulePath);
     if (!g_hOriginalDll) {
-        g_hOriginalDll = LoadLibraryW(L"onnxruntime_real.dll");
+        g_hOriginalDll = LoadLibraryW(L"ml1151_real.dll");
     }
 
     if (!g_hOriginalDll) {
-        OutputDebugStringA("VDJ-GPU-Proxy: Failed to load onnxruntime_real.dll\n");
+        OutputDebugStringA("VDJ-GPU-Proxy: Failed to load ml1151_real.dll\n");
         return FALSE;
     }
 
@@ -295,11 +295,11 @@ const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
             }
             wchar_t* lastSlash = wcsrchr(modulePath, L'\\');
             if (lastSlash) {
-                wcscpy_s(lastSlash + 1, MAX_PATH - (lastSlash - modulePath) - 1, L"onnxruntime_real.dll");
+                wcscpy_s(lastSlash + 1, MAX_PATH - (lastSlash - modulePath) - 1, L"ml1151_real.dll");
             }
             g_hOriginalDll = LoadLibraryW(modulePath);
             if (!g_hOriginalDll) {
-                g_hOriginalDll = LoadLibraryW(L"onnxruntime_real.dll");
+                g_hOriginalDll = LoadLibraryW(L"ml1151_real.dll");
             }
         }
         
@@ -478,6 +478,46 @@ extern "C" ORT_EXPORT OrtStatusPtr ORT_API_CALL OrtSessionOptionsAppendExecution
     
     if (s_RealFunc) {
         return s_RealFunc(options, use_arena);
+    }
+    
+    return nullptr;
+}
+
+typedef OrtStatusPtr (ORT_API_CALL* PFN_OrtSessionOptionsAppendExecutionProvider_DML)(
+    OrtSessionOptions* options, int device_id);
+
+extern "C" ORT_EXPORT OrtStatusPtr ORT_API_CALL OrtSessionOptionsAppendExecutionProvider_DML(
+    OrtSessionOptions* options, int device_id) {
+    
+    static PFN_OrtSessionOptionsAppendExecutionProvider_DML s_RealFunc = nullptr;
+    
+    if (!s_RealFunc && g_hOriginalDll) {
+        s_RealFunc = (PFN_OrtSessionOptionsAppendExecutionProvider_DML)
+            GetProcAddress(g_hOriginalDll, "OrtSessionOptionsAppendExecutionProvider_DML");
+    }
+    
+    if (s_RealFunc) {
+        return s_RealFunc(options, device_id);
+    }
+    
+    return nullptr;
+}
+
+typedef OrtStatusPtr (ORT_API_CALL* PFN_OrtSessionOptionsAppendExecutionProviderEx_DML)(
+    OrtSessionOptions* options, const void* dml_device, const void* command_queue);
+
+extern "C" ORT_EXPORT OrtStatusPtr ORT_API_CALL OrtSessionOptionsAppendExecutionProviderEx_DML(
+    OrtSessionOptions* options, const void* dml_device, const void* command_queue) {
+    
+    static PFN_OrtSessionOptionsAppendExecutionProviderEx_DML s_RealFunc = nullptr;
+    
+    if (!s_RealFunc && g_hOriginalDll) {
+        s_RealFunc = (PFN_OrtSessionOptionsAppendExecutionProviderEx_DML)
+            GetProcAddress(g_hOriginalDll, "OrtSessionOptionsAppendExecutionProviderEx_DML");
+    }
+    
+    if (s_RealFunc) {
+        return s_RealFunc(options, dml_device, command_queue);
     }
     
     return nullptr;
