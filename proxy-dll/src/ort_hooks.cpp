@@ -488,7 +488,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             httpInputs.push_back(std::move(ht));
         }
 
-        vdj::HttpInferenceResult httpResult = vdj::GetHttpClient()->RunInference(
+        vdj::HttpInferenceResult httpResult = vdj::GetHttpClient()->RunInferenceBinary(
             session_id, input_name_vec, httpInputs, output_name_vec
         );
 

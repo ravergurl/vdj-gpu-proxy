@@ -3,15 +3,19 @@ import signal
 import sys
 import logging
 import time
+import threading
 from .grpc_server import serve
 
 
 def main():
     parser = argparse.ArgumentParser(description="VDJ Stems GPU Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=50051, help="Port to listen on")
+    parser.add_argument("--port", type=int, default=50051, help="gRPC port to listen on")
+    parser.add_argument("--http-streaming-port", type=int, default=8081, help="HTTP streaming port")
     parser.add_argument("--workers", type=int, default=10, help="Max gRPC workers")
     parser.add_argument("--model", default="htdemucs", help="Demucs model name")
+    parser.add_argument("--grpc-only", action="store_true", help="Only run gRPC server")
+    parser.add_argument("--http-only", action="store_true", help="Only run HTTP streaming server")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
 
     args = parser.parse_args()
@@ -38,7 +42,8 @@ def main():
         logger.error(f"Failed to initialize engine: {e}")
         sys.exit(1)
 
-    server = serve(host=args.host, port=args.port, max_workers=args.workers)
+    grpc_server = None
+    http_thread = None
     shutdown_event = False
 
     def handle_shutdown(signum, frame):
@@ -46,14 +51,40 @@ def main():
         if shutdown_event:
             return
         shutdown_event = True
-        logger.info("Shutting down server (grace period: 5s)...")
-        server.stop(grace=5)
+        logger.info("Shutting down servers (grace period: 5s)...")
+        if grpc_server:
+            grpc_server.stop(grace=5)
 
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
 
-    logger.info(f"VDJ Stems GPU Server running on {args.host}:{args.port}")
-    server.wait_for_termination()
+    # Start gRPC server if not http-only
+    if not args.http_only:
+        grpc_server = serve(host=args.host, port=args.port, max_workers=args.workers)
+        logger.info(f"gRPC server running on {args.host}:{args.port}")
+
+    # Start HTTP streaming server if not grpc-only
+    if not args.grpc_only:
+        from .http_streaming import run_streaming_server
+
+        http_thread = threading.Thread(
+            target=run_streaming_server,
+            args=(args.host, args.http_streaming_port),
+            daemon=True
+        )
+        http_thread.start()
+        logger.info(f"HTTP streaming server running on {args.host}:{args.http_streaming_port}")
+
+    # Wait for gRPC server if running, otherwise keep main thread alive
+    if grpc_server:
+        grpc_server.wait_for_termination()
+    else:
+        # Keep main thread alive for HTTP-only mode
+        try:
+            while not shutdown_event:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

@@ -670,14 +670,244 @@ HttpInferenceResult HttpClient::RunInference(
     return result;
 }
 
+// Binary protocol helpers
+namespace BinaryProtocol {
+    void WriteUint32(std::vector<uint8_t>& buf, uint32_t val) {
+        buf.push_back(val & 0xFF);
+        buf.push_back((val >> 8) & 0xFF);
+        buf.push_back((val >> 16) & 0xFF);
+        buf.push_back((val >> 24) & 0xFF);
+    }
+
+    void WriteInt64(std::vector<uint8_t>& buf, int64_t val) {
+        for (int i = 0; i < 8; i++) {
+            buf.push_back((val >> (i * 8)) & 0xFF);
+        }
+    }
+
+    void WriteString(std::vector<uint8_t>& buf, const std::string& str) {
+        WriteUint32(buf, (uint32_t)str.size());
+        buf.insert(buf.end(), str.begin(), str.end());
+    }
+
+    void WriteShape(std::vector<uint8_t>& buf, const std::vector<int64_t>& shape) {
+        WriteUint32(buf, (uint32_t)shape.size());
+        for (int64_t dim : shape) {
+            WriteInt64(buf, dim);
+        }
+    }
+
+    void WriteTensor(std::vector<uint8_t>& buf, const std::string& name,
+                     const std::vector<int64_t>& shape, uint32_t dtype,
+                     const uint8_t* data, size_t dataLen) {
+        WriteString(buf, name);
+        WriteShape(buf, shape);
+        WriteUint32(buf, dtype);
+        WriteUint32(buf, (uint32_t)dataLen);
+        buf.insert(buf.end(), data, data + dataLen);
+    }
+
+    uint32_t ReadUint32(const uint8_t* data, size_t& offset) {
+        uint32_t val = data[offset] |
+                       (data[offset + 1] << 8) |
+                       (data[offset + 2] << 16) |
+                       (data[offset + 3] << 24);
+        offset += 4;
+        return val;
+    }
+
+    int64_t ReadInt64(const uint8_t* data, size_t& offset) {
+        int64_t val = 0;
+        for (int i = 0; i < 8; i++) {
+            val |= ((int64_t)data[offset + i]) << (i * 8);
+        }
+        offset += 8;
+        return val;
+    }
+
+    std::string ReadString(const uint8_t* data, size_t& offset, size_t maxSize) {
+        uint32_t len = ReadUint32(data, offset);
+        if (offset + len > maxSize) {
+            throw std::runtime_error("String read would exceed buffer");
+        }
+        std::string str((const char*)(data + offset), len);
+        offset += len;
+        return str;
+    }
+
+    std::vector<int64_t> ReadShape(const uint8_t* data, size_t& offset, size_t maxSize) {
+        uint32_t ndim = ReadUint32(data, offset);
+        if (ndim > 16) throw std::runtime_error("Invalid ndim");
+        std::vector<int64_t> shape;
+        for (uint32_t i = 0; i < ndim; i++) {
+            if (offset + 8 > maxSize) {
+                throw std::runtime_error("Shape read would exceed buffer");
+            }
+            shape.push_back(ReadInt64(data, offset));
+        }
+        return shape;
+    }
+}
+
 HttpInferenceResult HttpClient::RunInferenceBinary(
     uint64_t session_id,
     const std::vector<std::string>& input_names,
     const std::vector<HttpTensorData>& inputs,
     const std::vector<std::string>& output_names
 ) {
-    // For now, fall back to JSON. Binary requires protobuf serialization.
-    return RunInference(session_id, input_names, inputs, output_names);
+    HttpInferenceResult result;
+    result.success = false;
+
+    DebugLog("HTTP: RunInferenceBinary START session=%llu inputs=%zu outputs=%zu\n",
+             session_id, input_names.size(), output_names.size());
+
+    if (input_names.size() != inputs.size()) {
+        result.error_message = "Input names count does not match inputs count";
+        DebugLog("HTTP: RunInferenceBinary FAIL - %s\n", result.error_message.c_str());
+        return result;
+    }
+
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+
+    if (!impl_->connected || !impl_->hConnect) {
+        result.error_message = "Not connected to server";
+        DebugLog("HTTP: RunInferenceBinary FAIL - %s\n", result.error_message.c_str());
+        return result;
+    }
+
+    // Build binary request
+    DebugLog("HTTP: Building binary request...\n");
+    std::vector<uint8_t> requestBuf;
+    try {
+        // Session ID
+        BinaryProtocol::WriteUint32(requestBuf, (uint32_t)session_id);
+
+        // Number of inputs
+        BinaryProtocol::WriteUint32(requestBuf, (uint32_t)inputs.size());
+
+        // Each input tensor
+        for (size_t i = 0; i < inputs.size(); i++) {
+            BinaryProtocol::WriteTensor(
+                requestBuf,
+                input_names[i],
+                inputs[i].shape,
+                inputs[i].dtype,
+                inputs[i].data.data(),
+                inputs[i].data.size()
+            );
+
+            std::string shapeStr = "[";
+            for (size_t j = 0; j < inputs[i].shape.size(); j++) {
+                if (j > 0) shapeStr += ",";
+                shapeStr += std::to_string(inputs[i].shape[j]);
+            }
+            shapeStr += "]";
+            DebugLog("HTTP: Binary Input[%zu] name=%s shape=%s dtype=%d dataLen=%zu\n",
+                     i, input_names[i].c_str(), shapeStr.c_str(),
+                     inputs[i].dtype, inputs[i].data.size());
+        }
+
+        // Number of outputs
+        BinaryProtocol::WriteUint32(requestBuf, (uint32_t)output_names.size());
+
+        // Each output name
+        for (const auto& name : output_names) {
+            BinaryProtocol::WriteString(requestBuf, name);
+        }
+    }
+    catch (const std::exception& e) {
+        result.error_message = std::string("Binary request building failed: ") + e.what();
+        DebugLog("HTTP: Binary building FAILED - %s\n", e.what());
+        return result;
+    }
+
+    DebugLog("HTTP: Binary request size=%zu bytes (%.2f MB)\n",
+             requestBuf.size(), requestBuf.size() / (1024.0 * 1024.0));
+
+    if (requestBuf.size() > MAX_PAYLOAD_SIZE) {
+        result.error_message = "Binary payload exceeds size limit";
+        DebugLog("HTTP: RunInferenceBinary FAIL - %s\n", result.error_message.c_str());
+        return result;
+    }
+
+    // Send binary request
+    std::string requestBody((const char*)requestBuf.data(), requestBuf.size());
+    DebugLog("HTTP: Sending POST /inference_binary...\n");
+    std::string response = impl_->DoRequest(L"POST", L"/inference_binary", requestBody, L"application/octet-stream");
+
+    if (response.empty()) {
+        result.error_message = "Empty response from server";
+        DebugLog("HTTP: RunInferenceBinary FAIL - %s\n", result.error_message.c_str());
+        return result;
+    }
+    DebugLog("HTTP: Got binary response length=%zu\n", response.size());
+
+    // Parse binary response
+    try {
+        const uint8_t* data = (const uint8_t*)response.data();
+        size_t offset = 0;
+        size_t maxSize = response.size();
+
+        // Read session_id
+        uint32_t respSessionId = BinaryProtocol::ReadUint32(data, offset);
+        DebugLog("HTTP: Binary response session_id=%u\n", respSessionId);
+
+        // Read status
+        uint32_t status = BinaryProtocol::ReadUint32(data, offset);
+        DebugLog("HTTP: Binary response status=%u\n", status);
+
+        // Read error message
+        std::string errorMsg = BinaryProtocol::ReadString(data, offset, maxSize);
+        if (status != 0) {
+            result.error_message = errorMsg.empty() ? "Server returned error" : errorMsg;
+            DebugLog("HTTP: Server error: %s\n", result.error_message.c_str());
+            return result;
+        }
+
+        // Read number of outputs
+        uint32_t numOutputs = BinaryProtocol::ReadUint32(data, offset);
+        DebugLog("HTTP: Binary response num_outputs=%u\n", numOutputs);
+
+        // Parse each output tensor
+        for (uint32_t i = 0; i < numOutputs; i++) {
+            std::string outputName = BinaryProtocol::ReadString(data, offset, maxSize);
+            std::vector<int64_t> shape = BinaryProtocol::ReadShape(data, offset, maxSize);
+            uint32_t dtype = BinaryProtocol::ReadUint32(data, offset);
+            uint32_t dataLen = BinaryProtocol::ReadUint32(data, offset);
+
+            if (offset + dataLen > maxSize) {
+                throw std::runtime_error("Tensor data would exceed buffer");
+            }
+
+            HttpTensorData td;
+            td.shape = shape;
+            td.dtype = dtype;
+            td.data.assign(data + offset, data + offset + dataLen);
+            offset += dataLen;
+
+            std::string shapeStr = "[";
+            for (size_t j = 0; j < shape.size(); j++) {
+                if (j > 0) shapeStr += ",";
+                shapeStr += std::to_string(shape[j]);
+            }
+            shapeStr += "]";
+            DebugLog("HTTP: Binary Output[%u] name=%s shape=%s dtype=%d dataLen=%u\n",
+                     i, outputName.c_str(), shapeStr.c_str(), dtype, dataLen);
+
+            result.outputs.push_back(std::move(td));
+        }
+
+        DebugLog("HTTP: Parsed %zu binary outputs\n", result.outputs.size());
+        result.success = true;
+        DebugLog("HTTP: RunInferenceBinary END success=true\n");
+    }
+    catch (const std::exception& e) {
+        result.error_message = std::string("Binary response parsing failed: ") + e.what();
+        DebugLog("HTTP: Binary parsing FAILED - %s\n", e.what());
+        return result;
+    }
+
+    return result;
 }
 
 static std::unique_ptr<HttpClient> g_httpClient;
