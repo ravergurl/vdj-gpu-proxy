@@ -423,6 +423,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     std::vector<std::string> input_name_vec;
     std::vector<vdj::TensorData> input_tensors;
     std::vector<std::string> output_name_vec;
+    bool squeezed_batch_dim = false;
 
     for (size_t i = 0; i < input_len; i++) {
         input_name_vec.push_back(input_names[i]);
@@ -447,6 +448,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
 
             // Remove first dimension
             td.shape.erase(td.shape.begin());
+            squeezed_batch_dim = true;
         }
 
         input_tensors.push_back(std::move(td));
@@ -576,6 +578,19 @@ OrtStatusPtr ORT_API_CALL HookedRun(
 
     // Return only the outputs VDJ requested
     for (size_t i = 0; i < output_names_len; i++) {
+        // If we squeezed batch dimension from input, add it back to outputs
+        // VDJ expects same shape format: [1, channels, samples]
+        if (squeezed_batch_dim && outputTensors[i].shape.size() == 2) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Restoring batch dimension to output[%zu]: [%lld,%lld] -> [1,%lld,%lld]\n",
+                     i, outputTensors[i].shape[0], outputTensors[i].shape[1],
+                     outputTensors[i].shape[0], outputTensors[i].shape[1]);
+            OutputDebugStringA(msg);
+
+            // Insert batch dimension at front
+            outputTensors[i].shape.insert(outputTensors[i].shape.begin(), 1);
+        }
+
         void* buffer = nullptr;
         OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, outputTensors[i], &buffer);
         if (!ort_value) {
