@@ -1,0 +1,9 @@
+tunnel: 831e1b5b-33d5-4ef3-a4c8-b4e4eccda4d8
+credentials-file: /root/.cloudflared/831e1b5b-33d5-4ef3-a4c8-b4e4eccda4d8.json
+
+# HTTP Binary Streaming Configuration
+# Routes all traffic to port 8081 where HTTP streaming server runs
+ingress:
+  - hostname: vdj-gpu-direct.ai-smith.net
+    service: http://localhost:8081
+  - service: http_status:404
