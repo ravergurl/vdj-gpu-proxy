@@ -1,5 +1,6 @@
 #include "ort_hooks.h"
 #include "grpc_client.h"
+#include "http_client.h"
 #include "tensor_utils.h"
 #include "logger.h"
 #include "../include/onnxruntime_c_api.h"
@@ -34,6 +35,7 @@ static void InitDefaultConfig() {
 
 // Connection state
 static std::atomic<bool> g_ServerConnected{false};
+static std::atomic<bool> g_UsingHttpClient{false};
 static std::atomic<uint64_t> g_SessionCounter{0};
 
 // Output buffer tracking for cleanup
@@ -122,9 +124,13 @@ bool InitializeOrtProxy() {
 
 void ShutdownOrtProxy() {
     if (g_ServerConnected) {
-        vdj::GrpcClient* client = vdj::GetGrpcClient();
-        client->Disconnect();
+        if (g_UsingHttpClient) {
+            vdj::GetHttpClient()->Disconnect();
+        } else {
+            vdj::GetGrpcClient()->Disconnect();
+        }
         g_ServerConnected = false;
+        g_UsingHttpClient = false;
     }
     
     if (g_BufferLockInitialized) {
@@ -333,21 +339,47 @@ static std::once_flag g_ConnectOnce;
 static void TryConnectToServer() {
     if (g_ServerConnected) return;
     if (!g_Config.enabled) return;
-    
+
     std::call_once(g_ConnectOnce, []() {
         if (g_ServerConnected) return;
-        
-        vdj::GrpcClient* client = vdj::GetGrpcClient();
+
         bool connected = false;
-        
+
         if (g_Config.use_tunnel && g_Config.tunnel_url[0] != '\0') {
-            OutputDebugStringA("VDJ-GPU-Proxy: Connecting via tunnel...\n");
-            connected = client->ConnectWithTunnel(g_Config.tunnel_url);
+            std::string tunnelUrl(g_Config.tunnel_url);
+
+            // Use HTTP client for HTTPS URLs (Cloudflare tunnel)
+            if (tunnelUrl.find("https://") == 0 || tunnelUrl.find("http://") == 0) {
+                OutputDebugStringA("VDJ-GPU-Proxy: Connecting via HTTP gateway...\n");
+                OutputDebugStringA(g_Config.tunnel_url);
+                OutputDebugStringA("\n");
+
+                vdj::HttpClient* httpClient = vdj::GetHttpClient();
+                connected = httpClient->Connect(tunnelUrl);
+
+                if (connected) {
+                    g_UsingHttpClient = true;
+                    vdj::ServerInfo info = httpClient->GetServerInfo();
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Connected to %s (model: %s)\n",
+                             info.version.c_str(), info.model_name.c_str());
+                    OutputDebugStringA(msg);
+                }
+            } else {
+                // Try gRPC with TLS for non-HTTP tunnel URLs (legacy)
+                OutputDebugStringA("VDJ-GPU-Proxy: Connecting via gRPC tunnel...\n");
+                vdj::GrpcClient* grpcClient = vdj::GetGrpcClient();
+                connected = grpcClient->ConnectWithTunnel(tunnelUrl);
+                g_UsingHttpClient = false;
+            }
         } else if (g_Config.server_address[0] != '\0') {
-            OutputDebugStringA("VDJ-GPU-Proxy: Connecting to server...\n");
-            connected = client->Connect(g_Config.server_address, g_Config.server_port);
+            // Local/LAN connection uses gRPC (more efficient)
+            OutputDebugStringA("VDJ-GPU-Proxy: Connecting to gRPC server...\n");
+            vdj::GrpcClient* grpcClient = vdj::GetGrpcClient();
+            connected = grpcClient->Connect(g_Config.server_address, g_Config.server_port);
+            g_UsingHttpClient = false;
         }
-        
+
         g_ServerConnected = connected;
         OutputDebugStringA(connected ? "VDJ-GPU-Proxy: Connected!\n" : "VDJ-GPU-Proxy: Connection failed\n");
     });
@@ -369,9 +401,16 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     }
 
     TryConnectToServer();
-    
-    vdj::GrpcClient* client = vdj::GetGrpcClient();
-    if (!client->IsConnected()) {
+
+    // Check connection based on which client we're using
+    bool isConnected = false;
+    if (g_UsingHttpClient) {
+        isConnected = vdj::GetHttpClient()->IsConnected();
+    } else {
+        isConnected = vdj::GetGrpcClient()->IsConnected();
+    }
+
+    if (!isConnected) {
         if (g_Config.fallback_to_local) {
             return g_OriginalRun(session, run_options, input_names, inputs,
                                 input_len, output_names, output_names_len, outputs);
@@ -380,6 +419,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         return nullptr;
     }
 
+    // Extract input tensors
     std::vector<std::string> input_name_vec;
     std::vector<vdj::TensorData> input_tensors;
     std::vector<std::string> output_name_vec;
@@ -404,26 +444,66 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     }
 
     uint64_t session_id = ++g_SessionCounter;
-    vdj::InferenceResult result = client->RunInference(
-        session_id, input_name_vec, input_tensors, output_name_vec
-    );
 
-    if (!result.success) {
+    // Run inference via appropriate client
+    bool inferenceSuccess = false;
+    std::string errorMessage;
+    std::vector<vdj::TensorData> outputTensors;
+
+    if (g_UsingHttpClient) {
+        // Use HTTP client
+        std::vector<vdj::HttpTensorData> httpInputs;
+        for (const auto& t : input_tensors) {
+            vdj::HttpTensorData ht;
+            ht.shape = t.shape;
+            ht.dtype = t.dtype;
+            ht.data = t.data;
+            httpInputs.push_back(std::move(ht));
+        }
+
+        vdj::HttpInferenceResult httpResult = vdj::GetHttpClient()->RunInference(
+            session_id, input_name_vec, httpInputs, output_name_vec
+        );
+
+        inferenceSuccess = httpResult.success;
+        errorMessage = httpResult.error_message;
+
+        if (inferenceSuccess) {
+            for (auto& ht : httpResult.outputs) {
+                vdj::TensorData td;
+                td.shape = std::move(ht.shape);
+                td.dtype = ht.dtype;
+                td.data = std::move(ht.data);
+                outputTensors.push_back(std::move(td));
+            }
+        }
+    } else {
+        // Use gRPC client
+        vdj::InferenceResult result = vdj::GetGrpcClient()->RunInference(
+            session_id, input_name_vec, input_tensors, output_name_vec
+        );
+
+        inferenceSuccess = result.success;
+        errorMessage = result.error_message;
+        outputTensors = std::move(result.outputs);
+    }
+
+    if (!inferenceSuccess) {
         char msg[512];
-        snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Remote inference failed: %s\n", 
-                 result.error_message.c_str());
+        snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Remote inference failed: %s\n",
+                 errorMessage.c_str());
         OutputDebugStringA(msg);
-        
+
         if (g_Config.fallback_to_local) {
             OutputDebugStringA("VDJ-GPU-Proxy: Falling back to local inference\n");
             return g_OriginalRun(session, run_options, input_names, inputs,
                                 input_len, output_names, output_names_len, outputs);
         }
-        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, result.error_message.c_str());
+        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, errorMessage.c_str());
         return nullptr;
     }
 
-    if (result.outputs.size() != output_names_len) {
+    if (outputTensors.size() != output_names_len) {
         OutputDebugStringA("VDJ-GPU-Proxy: Output count mismatch\n");
         if (g_Config.fallback_to_local) {
             return g_OriginalRun(session, run_options, input_names, inputs,
@@ -435,7 +515,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
 
     for (size_t i = 0; i < output_names_len; i++) {
         void* buffer = nullptr;
-        OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, result.outputs[i], &buffer);
+        OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, outputTensors[i], &buffer);
         if (!ort_value) {
             OutputDebugStringA("VDJ-GPU-Proxy: Failed to create output OrtValue\n");
             for (size_t j = 0; j < i; j++) {

@@ -2,6 +2,7 @@ add_library(onnxruntime SHARED
     src/dllmain.cpp
     src/ort_hooks.cpp
     src/grpc_client.cpp
+    src/http_client.cpp
     src/tensor_utils.cpp
     src/logger.cpp
 )
@@ -13,7 +14,7 @@ target_include_directories(onnxruntime PRIVATE
 
 # Platform-specific link libraries
 if(WIN32)
-    target_link_libraries(onnxruntime PRIVATE kernel32 shell32 advapi32)
+    target_link_libraries(onnxruntime PRIVATE kernel32 shell32 advapi32 winhttp)
 endif()
 
 target_link_libraries(onnxruntime PRIVATE
