@@ -436,6 +436,19 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to extract input tensor");
             return nullptr;
         }
+
+        // Server expects 2D audio tensor (channels, samples)
+        // If first dimension is 1 (batch size), squeeze it out
+        if (i == 0 && td.shape.size() == 3 && td.shape[0] == 1) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Squeezing batch dimension from input[0]: [%lld,%lld,%lld] -> [%lld,%lld]\n",
+                     td.shape[0], td.shape[1], td.shape[2], td.shape[1], td.shape[2]);
+            OutputDebugStringA(msg);
+
+            // Remove first dimension
+            td.shape.erase(td.shape.begin());
+        }
+
         input_tensors.push_back(std::move(td));
     }
 
