@@ -222,17 +222,10 @@ public:
             return "";
         }
 
-        // Check if body data is accessible (prevent access violation)
-        if (!body.empty()) {
-            __try {
-                volatile char test = body[0];
-                test = body[body.size() - 1];
-                (void)test;  // Suppress unused variable warning
-            }
-            __except(EXCEPTION_EXECUTE_HANDLER) {
-                DebugLog("HTTP: DoRequest FAIL - body data inaccessible (access violation)\n");
-                return "";
-            }
+        // Validate body data is accessible
+        if (!body.empty() && body.data() == nullptr) {
+            DebugLog("HTTP: DoRequest FAIL - body data pointer is null\n");
+            return "";
         }
 
         DWORD flags = useSSL ? WINHTTP_FLAG_SECURE : 0;
@@ -272,25 +265,25 @@ public:
         DebugLog("HTTP: WinHttpSendRequest headers=%S bodyLen=%u\n",
                  headers.empty() ? L"(none)" : headers.c_str(), (DWORD)body.size());
 
-        // Wrap in SEH to catch any crashes
-        BOOL result = FALSE;
-        __try {
-            result = WinHttpSendRequest(
-                hRequest,
-                headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
-                headers.empty() ? 0 : (DWORD)-1,
-                body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.c_str(),
-                (DWORD)body.size(),
-                (DWORD)body.size(),
-                0
-            );
+        // For large payloads, log memory status
+        if (body.size() > 10 * 1024 * 1024) {
+            MEMORYSTATUSEX memStatus = {0};
+            memStatus.dwLength = sizeof(memStatus);
+            if (GlobalMemoryStatusEx(&memStatus)) {
+                DebugLog("HTTP: Memory available: %llu MB (load: %u%%)\n",
+                         memStatus.ullAvailPhys / (1024 * 1024), memStatus.dwMemoryLoad);
+            }
         }
-        __except(EXCEPTION_EXECUTE_HANDLER) {
-            DWORD exCode = GetExceptionCode();
-            DebugLog("HTTP: WinHttpSendRequest CRASHED exCode=0x%08X\n", exCode);
-            WinHttpCloseHandle(hRequest);
-            return "";
-        }
+
+        BOOL result = WinHttpSendRequest(
+            hRequest,
+            headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
+            headers.empty() ? 0 : (DWORD)-1,
+            body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.c_str(),
+            (DWORD)body.size(),
+            (DWORD)body.size(),
+            0
+        );
 
         if (!result) {
             DWORD err = GetLastError();
@@ -545,8 +538,9 @@ HttpInferenceResult HttpClient::RunInference(
         return result;
     }
 
+    // Build JSON with error handling
     std::string body;
-    __try {
+    try {
         std::stringstream json;
         json << "{\"session_id\":" << session_id << ",";
         json << "\"input_names\":[";
@@ -565,17 +559,8 @@ HttpInferenceResult HttpClient::RunInference(
             }
             json << "],\"dtype\":" << inputs[i].dtype << ",";
 
-            // Base64 encode with error handling
-            std::string encoded;
-            __try {
-                encoded = Base64Encode(inputs[i].data.data(), inputs[i].data.size());
-            }
-            __except(EXCEPTION_EXECUTE_HANDLER) {
-                result.error_message = "Base64 encoding failed (exception)";
-                DebugLog("HTTP: Base64Encode CRASHED for input %zu\n", i);
-                return result;
-            }
-
+            // Base64 encode - may throw on OOM
+            std::string encoded = Base64Encode(inputs[i].data.data(), inputs[i].data.size());
             json << "\"data\":\"" << encoded << "\"}";
         }
 
@@ -588,9 +573,19 @@ HttpInferenceResult HttpClient::RunInference(
 
         body = json.str();
     }
-    __except(EXCEPTION_EXECUTE_HANDLER) {
-        result.error_message = "JSON building failed (out of memory or exception)";
-        DebugLog("HTTP: JSON building CRASHED\n");
+    catch (const std::bad_alloc&) {
+        result.error_message = "JSON building failed (out of memory)";
+        DebugLog("HTTP: JSON building FAILED - out of memory\n");
+        return result;
+    }
+    catch (const std::exception& e) {
+        result.error_message = std::string("JSON building failed: ") + e.what();
+        DebugLog("HTTP: JSON building FAILED - %s\n", e.what());
+        return result;
+    }
+    catch (...) {
+        result.error_message = "JSON building failed (unknown exception)";
+        DebugLog("HTTP: JSON building FAILED - unknown exception\n");
         return result;
     }
 
