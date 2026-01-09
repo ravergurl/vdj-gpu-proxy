@@ -439,8 +439,22 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         input_tensors.push_back(std::move(td));
     }
 
-    for (size_t i = 0; i < output_names_len; i++) {
-        output_name_vec.push_back(output_names[i]);
+    // Server expects specific stem names, not generic output names
+    // Always request all 4 stems regardless of what VDJ asks for
+    const std::vector<std::string> stem_names = {"drums", "bass", "other", "vocals"};
+
+    if (output_names_len == 4) {
+        // VDJ is asking for 4 outputs - use correct stem names
+        output_name_vec = stem_names;
+    } else if (output_names_len == 2) {
+        // VDJ is asking for 2 outputs - still need to request all 4 from server
+        // We'll return only the first 2 to VDJ
+        output_name_vec = stem_names;
+    } else {
+        // Use what VDJ requested (fallback)
+        for (size_t i = 0; i < output_names_len; i++) {
+            output_name_vec.push_back(output_names[i]);
+        }
     }
 
     uint64_t session_id = ++g_SessionCounter;
@@ -503,16 +517,51 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         return nullptr;
     }
 
-    if (outputTensors.size() != output_names_len) {
-        OutputDebugStringA("VDJ-GPU-Proxy: Output count mismatch\n");
-        if (g_Config.fallback_to_local) {
-            return g_OriginalRun(session, run_options, input_names, inputs,
-                                input_len, output_names, output_names_len, outputs);
+    // Check if we got the expected outputs from server
+    // We requested stem_names.size() outputs (4 stems)
+    if (output_name_vec.size() == 4) {
+        // We requested 4 stems
+        if (outputTensors.size() != 4) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Server returned %zu outputs, expected 4 stems\n",
+                     outputTensors.size());
+            OutputDebugStringA(msg);
+            if (g_Config.fallback_to_local) {
+                return g_OriginalRun(session, run_options, input_names, inputs,
+                                    input_len, output_names, output_names_len, outputs);
+            }
+            if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Incorrect output count from server");
+            return nullptr;
         }
-        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Output count mismatch from server");
-        return nullptr;
+
+        // VDJ might want fewer outputs than we got (e.g., VDJ wants 2, we got 4)
+        // Just return the first N outputs VDJ requested
+        if (outputTensors.size() < output_names_len) {
+            OutputDebugStringA("VDJ-GPU-Proxy: VDJ wants more outputs than server returned\n");
+            if (g_Config.fallback_to_local) {
+                return g_OriginalRun(session, run_options, input_names, inputs,
+                                    input_len, output_names, output_names_len, outputs);
+            }
+            if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Not enough outputs from server");
+            return nullptr;
+        }
+    } else {
+        // Normal case: we requested exactly what VDJ wants
+        if (outputTensors.size() != output_names_len) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Output count mismatch (got %zu, expected %zu)\n",
+                     outputTensors.size(), output_names_len);
+            OutputDebugStringA(msg);
+            if (g_Config.fallback_to_local) {
+                return g_OriginalRun(session, run_options, input_names, inputs,
+                                    input_len, output_names, output_names_len, outputs);
+            }
+            if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Output count mismatch from server");
+            return nullptr;
+        }
     }
 
+    // Return only the outputs VDJ requested
     for (size_t i = 0; i < output_names_len; i++) {
         void* buffer = nullptr;
         OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, outputTensors[i], &buffer);
