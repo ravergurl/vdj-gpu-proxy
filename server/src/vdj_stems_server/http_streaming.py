@@ -176,21 +176,28 @@ async def inference_binary(request: Request):
         session_id, offset = BinaryProtocol.read_uint32(body, offset)
         num_inputs, offset = BinaryProtocol.read_uint32(body, offset)
 
-        # Read first input (audio)
-        input_name, offset = BinaryProtocol.read_string(body, offset)
-        input_shape, offset = BinaryProtocol.read_shape(body, offset)
-        input_dtype, offset = BinaryProtocol.read_uint32(body, offset)
-        input_data_len, offset = BinaryProtocol.read_uint32(body, offset)
-        input_data = body[offset:offset+input_data_len]
-        offset += input_data_len
+        # Read all inputs and find the audio tensor (2D with shape [channels, samples])
+        audio_data = None
+        audio_shape = None
 
-        # Skip remaining inputs (we only use first one)
-        for _ in range(num_inputs - 1):
-            _, offset = BinaryProtocol.read_string(body, offset)
-            _, offset = BinaryProtocol.read_shape(body, offset)
-            _, offset = BinaryProtocol.read_uint32(body, offset)
-            skip_len, offset = BinaryProtocol.read_uint32(body, offset)
-            offset += skip_len
+        for i in range(num_inputs):
+            input_name, offset = BinaryProtocol.read_string(body, offset)
+            input_shape, offset = BinaryProtocol.read_shape(body, offset)
+            input_dtype, offset = BinaryProtocol.read_uint32(body, offset)
+            input_data_len, offset = BinaryProtocol.read_uint32(body, offset)
+            input_data_buf = body[offset:offset+input_data_len]
+            offset += input_data_len
+
+            # Audio tensor is 2D: [channels, samples]
+            # Other inputs (spectrograms, etc.) are 3D or 4D
+            if len(input_shape) == 2:
+                logger.info(f"Found audio input: name={input_name}, shape={input_shape}")
+                audio_data = input_data_buf
+                audio_shape = input_shape
+                break  # Use first 2D tensor as audio
+
+        if audio_data is None:
+            raise ValueError(f"No 2D audio input found among {num_inputs} inputs")
 
         # Read output names
         num_outputs, offset = BinaryProtocol.read_uint32(body, offset)
