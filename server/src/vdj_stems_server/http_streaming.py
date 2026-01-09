@@ -217,17 +217,14 @@ async def inference_binary(request: Request):
     except Exception as e:
         logger.exception("Failed to parse binary request")
         # Return error in binary protocol format
-        error_buf = bytearray()
-        # Session ID (might be invalid if parsing failed early, use 0)
-        BinaryProtocol.write_uint32(error_buf, 0)
-        # Status (non-zero = error)
-        BinaryProtocol.write_uint32(error_buf, 1)
-        # Error message
         error_msg = str(e)
-        BinaryProtocol.write_string(error_buf, error_msg)
+        error_buf = BinaryProtocol.write_uint32(0)  # session_id
+        error_buf += BinaryProtocol.write_uint32(1)  # status = error
+        error_buf += BinaryProtocol.write_string(error_msg)  # error message
+        error_buf += BinaryProtocol.write_uint32(0)  # num_outputs = 0
         logger.error(f"Returning binary error response: {error_msg}")
         return Response(
-            content=bytes(error_buf),
+            content=error_buf,
             status_code=400,
             media_type="application/octet-stream"
         )
