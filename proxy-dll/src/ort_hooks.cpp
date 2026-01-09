@@ -455,22 +455,19 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     }
 
     // Server expects specific stem names, not generic output names
-    // Always request all 4 stems regardless of what VDJ asks for
+    // Always request all 4 stems from server AND return all 4 to VDJ
+    // VDJ needs all 4 stems to function properly, even if it asks for fewer
     const std::vector<std::string> stem_names = {"drums", "bass", "other", "vocals"};
+    output_name_vec = stem_names;
 
-    if (output_names_len == 4) {
-        // VDJ is asking for 4 outputs - use correct stem names
-        output_name_vec = stem_names;
-    } else if (output_names_len == 2) {
-        // VDJ is asking for 2 outputs - still need to request all 4 from server
-        // We'll return only the first 2 to VDJ
-        output_name_vec = stem_names;
-    } else {
-        // Use what VDJ requested (fallback)
-        for (size_t i = 0; i < output_names_len; i++) {
-            output_name_vec.push_back(output_names[i]);
-        }
-    }
+    // Log what VDJ actually requested vs what we'll return
+    char msg[256];
+    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: VDJ requested %zu outputs, forcing return of 4 stems\n", output_names_len);
+    OutputDebugStringA(msg);
+
+    // Override output_names_len to always return all 4 stems
+    size_t original_output_names_len = output_names_len;
+    output_names_len = 4;
 
     uint64_t session_id = ++g_SessionCounter;
 
