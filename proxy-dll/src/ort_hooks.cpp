@@ -454,20 +454,29 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         input_tensors.push_back(std::move(td));
     }
 
-    // Server expects specific stem names, not generic output names
-    // Always request all 4 stems from server AND return all 4 to VDJ
-    // VDJ needs all 4 stems to function properly, even if it asks for fewer
-    const std::vector<std::string> stem_names = {"drums", "bass", "other", "vocals"};
-    output_name_vec = stem_names;
-
-    // Log what VDJ actually requested vs what we'll return
-    char msg[256];
-    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: VDJ requested %zu outputs, forcing return of 4 stems\n", output_names_len);
+    // Log what VDJ actually requested
+    char msg[512];
+    std::string vdj_requested_names;
+    for (size_t i = 0; i < output_names_len; i++) {
+        if (i > 0) vdj_requested_names += ", ";
+        vdj_requested_names += output_names[i];
+    }
+    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: VDJ requested %zu outputs: [%s]\n",
+             output_names_len, vdj_requested_names.c_str());
     OutputDebugStringA(msg);
 
-    // Override output_names_len to always return all 4 stems
-    size_t original_output_names_len = output_names_len;
-    output_names_len = 4;
+    // Server always needs all 4 stem names to work correctly
+    const std::vector<std::string> stem_names = {"drums", "bass", "other", "vocals"};
+
+    // Always request all 4 stems from server
+    output_name_vec = stem_names;
+
+    // But ONLY return what VDJ requested to avoid buffer overrun
+    // If VDJ asks for fewer than 4, we'll return a subset
+    // (This may be why stems show 0% - VDJ might need all 4)
+    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Requesting 4 stems from server, will return %zu to VDJ\n",
+             output_names_len);
+    OutputDebugStringA(msg);
 
     uint64_t session_id = ++g_SessionCounter;
 
