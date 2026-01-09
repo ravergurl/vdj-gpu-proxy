@@ -24,7 +24,8 @@ static void DebugLog(const char* fmt, ...) {
 
 namespace {
     constexpr DWORD CONNECT_TIMEOUT_MS = 10000;
-    constexpr DWORD REQUEST_TIMEOUT_MS = 60000;
+    constexpr DWORD REQUEST_TIMEOUT_MS = 120000;  // 2 minutes for large payloads
+    constexpr size_t MAX_PAYLOAD_SIZE = 50 * 1024 * 1024;  // 50MB limit
 
     // Simple base64 encoding
     static const char base64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -214,6 +215,26 @@ public:
             return "";
         }
 
+        // Check payload size limit
+        if (body.size() > MAX_PAYLOAD_SIZE) {
+            DebugLog("HTTP: DoRequest FAIL - payload too large (%zu > %zu bytes)\n",
+                     body.size(), MAX_PAYLOAD_SIZE);
+            return "";
+        }
+
+        // Check if body data is accessible (prevent access violation)
+        if (!body.empty()) {
+            __try {
+                volatile char test = body[0];
+                test = body[body.size() - 1];
+                (void)test;  // Suppress unused variable warning
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER) {
+                DebugLog("HTTP: DoRequest FAIL - body data inaccessible (access violation)\n");
+                return "";
+            }
+        }
+
         DWORD flags = useSSL ? WINHTTP_FLAG_SECURE : 0;
         DebugLog("HTTP: WinHttpOpenRequest flags=%u (SSL=%d)\n", flags, useSSL ? 1 : 0);
 
@@ -251,19 +272,51 @@ public:
         DebugLog("HTTP: WinHttpSendRequest headers=%S bodyLen=%u\n",
                  headers.empty() ? L"(none)" : headers.c_str(), (DWORD)body.size());
 
-        BOOL result = WinHttpSendRequest(
-            hRequest,
-            headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
-            headers.empty() ? 0 : (DWORD)-1,
-            body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.c_str(),
-            (DWORD)body.size(),
-            (DWORD)body.size(),
-            0
-        );
+        // Wrap in SEH to catch any crashes
+        BOOL result = FALSE;
+        __try {
+            result = WinHttpSendRequest(
+                hRequest,
+                headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
+                headers.empty() ? 0 : (DWORD)-1,
+                body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.c_str(),
+                (DWORD)body.size(),
+                (DWORD)body.size(),
+                0
+            );
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            DWORD exCode = GetExceptionCode();
+            DebugLog("HTTP: WinHttpSendRequest CRASHED exCode=0x%08X\n", exCode);
+            WinHttpCloseHandle(hRequest);
+            return "";
+        }
 
         if (!result) {
             DWORD err = GetLastError();
-            DebugLog("HTTP: WinHttpSendRequest FAILED err=%u\n", err);
+            DebugLog("HTTP: WinHttpSendRequest FAILED err=%u (0x%08X)\n", err, err);
+
+            // Log specific error codes
+            switch (err) {
+                case ERROR_WINHTTP_CANNOT_CONNECT:
+                    DebugLog("HTTP: ERROR_WINHTTP_CANNOT_CONNECT - server unavailable\n");
+                    break;
+                case ERROR_WINHTTP_TIMEOUT:
+                    DebugLog("HTTP: ERROR_WINHTTP_TIMEOUT - request timed out\n");
+                    break;
+                case ERROR_WINHTTP_INVALID_SERVER_RESPONSE:
+                    DebugLog("HTTP: ERROR_WINHTTP_INVALID_SERVER_RESPONSE\n");
+                    break;
+                case ERROR_NOT_ENOUGH_MEMORY:
+                    DebugLog("HTTP: ERROR_NOT_ENOUGH_MEMORY - insufficient memory\n");
+                    break;
+                case ERROR_WINHTTP_OUT_OF_HANDLES:
+                    DebugLog("HTTP: ERROR_WINHTTP_OUT_OF_HANDLES\n");
+                    break;
+                default:
+                    DebugLog("HTTP: Unknown WinHTTP error\n");
+            }
+
             WinHttpCloseHandle(hRequest);
             return "";
         }
@@ -475,34 +528,72 @@ HttpInferenceResult HttpClient::RunInference(
 
     // Build JSON request
     DebugLog("HTTP: Building JSON request...\n");
-    std::stringstream json;
-    json << "{\"session_id\":" << session_id << ",";
-    json << "\"input_names\":[";
-    for (size_t i = 0; i < input_names.size(); i++) {
-        if (i > 0) json << ",";
-        json << "\"" << JsonEscape(input_names[i]) << "\"";
-    }
-    json << "],\"inputs\":[";
 
-    for (size_t i = 0; i < inputs.size(); i++) {
-        if (i > 0) json << ",";
-        json << "{\"shape\":[";
-        for (size_t j = 0; j < inputs[i].shape.size(); j++) {
-            if (j > 0) json << ",";
-            json << inputs[i].shape[j];
+    // Calculate estimated size to check for potential OOM
+    size_t estimatedSize = 1024;  // Base overhead
+    for (const auto& inp : inputs) {
+        estimatedSize += inp.data.size() * 4 / 3;  // Base64 overhead
+        estimatedSize += 1024;  // JSON structure overhead
+    }
+    DebugLog("HTTP: Estimated JSON size: %zu bytes (%.2f MB)\n",
+             estimatedSize, estimatedSize / (1024.0 * 1024.0));
+
+    if (estimatedSize > MAX_PAYLOAD_SIZE) {
+        result.error_message = "Payload would exceed size limit";
+        DebugLog("HTTP: RunInference FAIL - %s (%zu > %zu)\n",
+                 result.error_message.c_str(), estimatedSize, MAX_PAYLOAD_SIZE);
+        return result;
+    }
+
+    std::string body;
+    __try {
+        std::stringstream json;
+        json << "{\"session_id\":" << session_id << ",";
+        json << "\"input_names\":[";
+        for (size_t i = 0; i < input_names.size(); i++) {
+            if (i > 0) json << ",";
+            json << "\"" << JsonEscape(input_names[i]) << "\"";
         }
-        json << "],\"dtype\":" << inputs[i].dtype << ",";
-        json << "\"data\":\"" << Base64Encode(inputs[i].data.data(), inputs[i].data.size()) << "\"}";
+        json << "],\"inputs\":[";
+
+        for (size_t i = 0; i < inputs.size(); i++) {
+            if (i > 0) json << ",";
+            json << "{\"shape\":[";
+            for (size_t j = 0; j < inputs[i].shape.size(); j++) {
+                if (j > 0) json << ",";
+                json << inputs[i].shape[j];
+            }
+            json << "],\"dtype\":" << inputs[i].dtype << ",";
+
+            // Base64 encode with error handling
+            std::string encoded;
+            __try {
+                encoded = Base64Encode(inputs[i].data.data(), inputs[i].data.size());
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER) {
+                result.error_message = "Base64 encoding failed (exception)";
+                DebugLog("HTTP: Base64Encode CRASHED for input %zu\n", i);
+                return result;
+            }
+
+            json << "\"data\":\"" << encoded << "\"}";
+        }
+
+        json << "],\"output_names\":[";
+        for (size_t i = 0; i < output_names.size(); i++) {
+            if (i > 0) json << ",";
+            json << "\"" << JsonEscape(output_names[i]) << "\"";
+        }
+        json << "]}";
+
+        body = json.str();
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        result.error_message = "JSON building failed (out of memory or exception)";
+        DebugLog("HTTP: JSON building CRASHED\n");
+        return result;
     }
 
-    json << "],\"output_names\":[";
-    for (size_t i = 0; i < output_names.size(); i++) {
-        if (i > 0) json << ",";
-        json << "\"" << JsonEscape(output_names[i]) << "\"";
-    }
-    json << "]}";
-
-    std::string body = json.str();
     DebugLog("HTTP: Request JSON length=%zu\n", body.size());
 
     DebugLog("HTTP: Sending POST /inference...\n");
