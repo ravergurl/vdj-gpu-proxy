@@ -206,11 +206,11 @@ async def inference_binary(request: Request):
             name, offset = BinaryProtocol.read_string(body, offset)
             output_names.append(name)
 
-        logger.info(f"Binary inference: session={session_id}, input_shape={input_shape}, outputs={output_names}")
+        logger.info(f"Binary inference: session={session_id}, input_shape={audio_shape}, outputs={output_names}")
 
         # Return streaming response
         return StreamingResponse(
-            stream_stems_binary(session_id, input_data, input_shape, output_names),
+            stream_stems_binary(session_id, audio_data, audio_shape, output_names),
             media_type="application/octet-stream"
         )
 
