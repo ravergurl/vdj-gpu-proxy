@@ -190,11 +190,11 @@ async def inference_binary(request: Request):
 
             # Audio tensor is 2D: [channels, samples]
             # Other inputs (spectrograms, etc.) are 3D or 4D
-            if len(input_shape) == 2:
+            if len(input_shape) == 2 and audio_data is None:
                 logger.info(f"Found audio input: name={input_name}, shape={input_shape}")
                 audio_data = input_data_buf
                 audio_shape = input_shape
-                break  # Use first 2D tensor as audio
+                # Don't break - must read all inputs to keep offset correct
 
         if audio_data is None:
             raise ValueError(f"No 2D audio input found among {num_inputs} inputs")
