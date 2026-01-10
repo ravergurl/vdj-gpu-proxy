@@ -424,6 +424,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     std::vector<vdj::TensorData> input_tensors;
     std::vector<std::string> output_name_vec;
     bool squeezed_batch_dim = false;
+    bool has_2d_audio = false;
 
     for (size_t i = 0; i < input_len; i++) {
         input_name_vec.push_back(input_names[i]);
@@ -438,6 +439,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             return nullptr;
         }
 
+        // Check if this is 2D audio tensor (channels, samples) or 3D with batch
         // Server expects 2D audio tensor (channels, samples)
         // If first dimension is 1 (batch size), squeeze it out
         if (i == 0 && td.shape.size() == 3 && td.shape[0] == 1) {
@@ -449,9 +451,29 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             // Remove first dimension
             td.shape.erase(td.shape.begin());
             squeezed_batch_dim = true;
+            has_2d_audio = true;
+        } else if (td.shape.size() == 2) {
+            // Already 2D audio
+            has_2d_audio = true;
         }
 
         input_tensors.push_back(std::move(td));
+    }
+
+    // If no 2D audio input found (e.g., only 4D spectrograms), use local inference
+    // VDJ makes multiple types of calls: stems separation (2D audio) and analysis (4D spectrograms)
+    // Server only handles stems separation, so fallback for analysis calls
+    if (!has_2d_audio) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: No 2D audio input detected (only spectrograms), using local inference\n");
+        OutputDebugStringA(msg);
+
+        if (g_Config.fallback_to_local) {
+            return g_OriginalRun(session, run_options, input_names, inputs,
+                                input_len, output_names, output_names_len, outputs);
+        }
+        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Server requires 2D audio input");
+        return nullptr;
     }
 
     // Log what VDJ actually requested
