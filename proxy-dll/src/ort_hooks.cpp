@@ -465,7 +465,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     // Server only handles stems separation, so fallback for analysis calls
     if (!has_2d_audio) {
         char msg[256];
-        snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: No 2D audio input detected (only spectrograms), using local inference\n");
+        snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Analysis call detected (spectrogram), using fast local CPU (correct)\n");
         OutputDebugStringA(msg);
 
         if (g_Config.fallback_to_local) {
