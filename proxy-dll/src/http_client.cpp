@@ -1,4 +1,5 @@
 #include "http_client.h"
+#include "vdjstem_writer.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -1077,6 +1078,40 @@ VdjStemResult HttpClient::CreateVdjStem(
         }
 
         DebugLog("HTTP: Parsed %zu output tensors\n", result.outputs.size());
+
+        // If server didn't create the VDJStem file, create it client-side
+        if (stemFileLen == 0 && result.outputs.size() == 4) {
+            DebugLog("HTTP: Creating VDJStem file client-side...\n");
+
+            // Build stem data for writer
+            std::vector<std::pair<std::string, std::vector<float>>> stem_data;
+            const char* stem_names[] = {"drums", "bass", "other", "vocals"};
+
+            for (size_t i = 0; i < 4; i++) {
+                const auto& tensor = result.outputs[i];
+                // Convert uint8_t data to float
+                size_t num_floats = tensor.data.size() / sizeof(float);
+                std::vector<float> floats(num_floats);
+                memcpy(floats.data(), tensor.data.data(), tensor.data.size());
+                stem_data.push_back({stem_names[i], std::move(floats)});
+            }
+
+            // Create output path
+            std::string subdir = result.audio_hash.substr(0, 2);
+            std::string stemDir = stems_folder + "\\" + subdir;
+            CreateDirectoryA(stems_folder.c_str(), NULL);
+            CreateDirectoryA(stemDir.c_str(), NULL);
+            result.local_path = stemDir + "\\" + result.audio_hash + ".vdjstem";
+
+            // Create the file
+            if (CreateVdjStemFile(stem_data, result.local_path, 44100)) {
+                DebugLog("HTTP: VDJStem file created: %s\n", result.local_path.c_str());
+            } else {
+                DebugLog("HTTP: Warning - failed to create VDJStem file (ffmpeg missing?)\n");
+                // Not a fatal error - we still have the tensors
+            }
+        }
+
         result.success = true;
 
     } catch (const std::exception& e) {
