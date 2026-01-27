@@ -535,13 +535,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
 
     // Always request all 4 stems from server
     output_name_vec = stem_names;
-
-    // But ONLY return what VDJ requested to avoid buffer overrun
-    // If VDJ asks for fewer than 4, we'll return a subset
-    // (This may be why stems show 0% - VDJ might need all 4)
-    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Requesting 4 stems from server, will return %zu to VDJ\n",
-             output_names_len);
-    OutputDebugStringA(msg);
+    FileLog("Requesting 4 stems from server, will return %zu to VDJ\n", output_names_len);
 
     uint64_t session_id = ++g_SessionCounter;
 
