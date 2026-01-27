@@ -454,6 +454,11 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     FileLog("HookedRun called: inputs=%zu, outputs=%zu, enabled=%d, vdjStemMode=%d\n",
             input_len, output_names_len, g_Config.enabled ? 1 : 0, g_UseVdjStemMode ? 1 : 0);
 
+    // Check if VDJ pre-allocated output buffers
+    for (size_t i = 0; i < output_names_len; i++) {
+        FileLog("Pre-check outputs[%zu] = %p\n", i, (void*)outputs[i]);
+    }
+
     if (!g_Config.enabled) {
         FileLog("Proxy disabled - but local inference blocked, returning error\n");
         if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Proxy disabled and local inference blocked");
@@ -536,6 +541,35 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         vdj_requested_names += output_names[i];
     }
     FileLog("VDJ requested %zu outputs: [%s]\n", output_names_len, vdj_requested_names.c_str());
+
+    // DEBUG: Try running original first to see output format
+    static bool g_DiagnosticMode = false;
+    if (g_DiagnosticMode && g_OriginalRun) {
+        FileLog("DIAGNOSTIC: Calling original Run to see output format\n");
+        OrtStatusPtr origStatus = g_OriginalRun(session, run_options, input_names, inputs,
+                                                 input_len, output_names, output_names_len, outputs);
+        if (!origStatus) {
+            for (size_t i = 0; i < output_names_len; i++) {
+                if (outputs[i]) {
+                    vdj::TensorData td = vdj::ExtractTensorData(g_OriginalApi, outputs[i]);
+                    std::string shapeStr;
+                    for (size_t j = 0; j < td.shape.size(); j++) {
+                        if (j > 0) shapeStr += ",";
+                        shapeStr += std::to_string(td.shape[j]);
+                    }
+                    FileLog("DIAGNOSTIC: Original output[%zu] shape=[%s] dtype=%d dataLen=%zu\n",
+                            i, shapeStr.c_str(), td.dtype, td.data.size());
+                }
+            }
+            FileLog("DIAGNOSTIC: Returning original result for comparison\n");
+            return origStatus;
+        } else {
+            const char* errMsg = nullptr;
+            g_OriginalApi->GetErrorMessage(origStatus, &errMsg);
+            FileLog("DIAGNOSTIC: Original Run failed: %s\n", errMsg ? errMsg : "unknown");
+            g_OriginalApi->ReleaseStatus(origStatus);
+        }
+    }
 
     // Server always needs all 4 stem names to work correctly
     const std::vector<std::string> stem_names = {"drums", "bass", "other", "vocals"};
