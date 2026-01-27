@@ -192,13 +192,8 @@ bool InitializeOrtProxy() {
 
 void ShutdownOrtProxy() {
     if (g_ServerConnected) {
-        if (g_UsingHttpClient) {
-            vdj::GetHttpClient()->Disconnect();
-        } else {
-            vdj::GetGrpcClient()->Disconnect();
-        }
+        vdj::GetHttpClient()->Disconnect();
         g_ServerConnected = false;
-        g_UsingHttpClient = false;
     }
     
     if (g_BufferLockInitialized) {
@@ -418,45 +413,31 @@ static void TryConnectToServer() {
     std::call_once(g_ConnectOnce, []() {
         if (g_ServerConnected) return;
 
-        bool connected = false;
+        // Always use HTTP client - no gRPC
+        g_UsingHttpClient = true;
 
-        if (g_Config.use_tunnel && g_Config.tunnel_url[0] != '\0') {
-            std::string tunnelUrl(g_Config.tunnel_url);
+        std::string serverUrl;
+        if (g_Config.tunnel_url[0] != '\0') {
+            serverUrl = g_Config.tunnel_url;
+        } else {
+            // Default to the known server
+            serverUrl = "https://vdj-gpu-direct.ai-smith.net";
+        }
 
-            // Use HTTP client for HTTPS URLs (Cloudflare tunnel)
-            if (tunnelUrl.find("https://") == 0 || tunnelUrl.find("http://") == 0) {
-                OutputDebugStringA("VDJ-GPU-Proxy: Connecting via HTTP gateway...\n");
-                OutputDebugStringA(g_Config.tunnel_url);
-                OutputDebugStringA("\n");
+        FileLog("Connecting to HTTP server: %s\n", serverUrl.c_str());
 
-                vdj::HttpClient* httpClient = vdj::GetHttpClient();
-                connected = httpClient->Connect(tunnelUrl);
+        vdj::HttpClient* httpClient = vdj::GetHttpClient();
+        bool connected = httpClient->Connect(serverUrl);
 
-                if (connected) {
-                    g_UsingHttpClient = true;
-                    vdj::ServerInfo info = httpClient->GetServerInfo();
-                    char msg[256];
-                    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Connected to %s (model: %s)\n",
-                             info.version.c_str(), info.model_name.c_str());
-                    OutputDebugStringA(msg);
-                }
-            } else {
-                // Try gRPC with TLS for non-HTTP tunnel URLs (legacy)
-                OutputDebugStringA("VDJ-GPU-Proxy: Connecting via gRPC tunnel...\n");
-                vdj::GrpcClient* grpcClient = vdj::GetGrpcClient();
-                connected = grpcClient->ConnectWithTunnel(tunnelUrl);
-                g_UsingHttpClient = false;
-            }
-        } else if (g_Config.server_address[0] != '\0') {
-            // Local/LAN connection uses gRPC (more efficient)
-            OutputDebugStringA("VDJ-GPU-Proxy: Connecting to gRPC server...\n");
-            vdj::GrpcClient* grpcClient = vdj::GetGrpcClient();
-            connected = grpcClient->Connect(g_Config.server_address, g_Config.server_port);
-            g_UsingHttpClient = false;
+        if (connected) {
+            FileLog("HTTP connected!\n");
+            vdj::ServerInfo info = httpClient->GetServerInfo();
+            FileLog("Server: version=%s, model=%s\n", info.version.c_str(), info.model_name.c_str());
+        } else {
+            FileLog("HTTP connection FAILED\n");
         }
 
         g_ServerConnected = connected;
-        OutputDebugStringA(connected ? "VDJ-GPU-Proxy: Connected!\n" : "VDJ-GPU-Proxy: Connection failed\n");
     });
 }
 
@@ -482,15 +463,9 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     FileLog("TryConnectToServer... tunnel_url='%s'\n", g_Config.tunnel_url);
     TryConnectToServer();
 
-    // Check connection based on which client we're using
-    bool isConnected = false;
-    if (g_UsingHttpClient) {
-        isConnected = vdj::GetHttpClient()->IsConnected();
-        FileLog("HTTP client connected=%d\n", isConnected ? 1 : 0);
-    } else {
-        isConnected = vdj::GetGrpcClient()->IsConnected();
-        FileLog("gRPC client connected=%d\n", isConnected ? 1 : 0);
-    }
+    // Always use HTTP client
+    bool isConnected = vdj::GetHttpClient()->IsConnected();
+    FileLog("HTTP connected=%d\n", isConnected ? 1 : 0);
 
     if (!isConnected) {
         FileLog("NOT CONNECTED - BLOCKING local inference, must use remote\n");
@@ -579,8 +554,8 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     std::string errorMessage;
     std::vector<vdj::TensorData> outputTensors;
 
-    if (g_UsingHttpClient) {
-        // Use HTTP client
+    // Always use HTTP client
+    {
         std::vector<vdj::HttpTensorData> httpInputs;
         for (const auto& t : input_tensors) {
             vdj::HttpTensorData ht;
@@ -653,15 +628,6 @@ OrtStatusPtr ORT_API_CALL HookedRun(
                 }
             }
         }
-    } else {
-        // Use gRPC client
-        vdj::InferenceResult result = vdj::GetGrpcClient()->RunInference(
-            session_id, input_name_vec, input_tensors, output_name_vec
-        );
-
-        inferenceSuccess = result.success;
-        errorMessage = result.error_message;
-        outputTensors = std::move(result.outputs);
     }
 
     if (!inferenceSuccess) {
