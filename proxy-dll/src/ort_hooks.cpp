@@ -714,6 +714,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     }
 
     // Return outputs that VDJ requested
+    // IMPORTANT: VDJ pre-allocates output buffers - we must fill them, not replace them!
     for (size_t i = 0; i < output_names_len; i++) {
         std::string requestedName = output_names[i];
         vdj::TensorData* tensorToUse = nullptr;
@@ -740,39 +741,81 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             FileLog("VDJ wants unknown '%s' -> using tensor[%zu]\n", requestedName.c_str(), i % outputTensors.size());
         }
 
-        // If we squeezed batch dimension from input, add it back to outputs
-        // VDJ expects same shape format: [1, channels, samples]
-        if (squeezed_batch_dim && tensorToUse->shape.size() == 2) {
-            FileLog("Restoring batch dimension for output %zu\n", i);
-            tensorToUse->shape.insert(tensorToUse->shape.begin(), 1);
-        }
+        // Check if VDJ pre-allocated the output buffer
+        if (outputs[i] != nullptr) {
+            // VDJ pre-allocated - copy our data into their buffer
+            FileLog("VDJ pre-allocated output[%zu], filling existing buffer\n", i);
 
-        // Log final output shape
-        std::string outShapeStr;
-        for (size_t j = 0; j < tensorToUse->shape.size(); j++) {
-            if (j > 0) outShapeStr += ",";
-            outShapeStr += std::to_string(tensorToUse->shape[j]);
-        }
-        FileLog("Creating OrtValue for output %zu '%s': shape=[%s] dtype=%d dataLen=%zu\n",
-                i, output_names[i], outShapeStr.c_str(), tensorToUse->dtype, tensorToUse->data.size());
+            void* vdj_data = nullptr;
+            OrtStatus* status = g_OriginalApi->GetTensorMutableData(outputs[i], &vdj_data);
+            if (status) {
+                const char* errMsg = g_OriginalApi->GetErrorMessage(status);
+                FileLog("FAILED to get VDJ buffer for output %zu: %s\n", i, errMsg ? errMsg : "unknown");
+                g_OriginalApi->ReleaseStatus(status);
+                return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to get VDJ output buffer");
+            }
 
-        void* buffer = nullptr;
-        OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, *tensorToUse, &buffer);
-        if (!ort_value) {
-            FileLog("FAILED to create output OrtValue %zu\n", i);
-            for (size_t j = 0; j < i; j++) {
-                if (outputs[j]) {
-                    g_OriginalApi->ReleaseValue(outputs[j]);
-                    outputs[j] = nullptr;
+            // Get VDJ's expected shape to verify compatibility
+            OrtTensorTypeAndShapeInfo* info = nullptr;
+            status = g_OriginalApi->GetTensorTypeAndShape(outputs[i], &info);
+            if (!status) {
+                size_t vdj_element_count = 0;
+                g_OriginalApi->GetTensorShapeElementCount(info, &vdj_element_count);
+
+                size_t num_dims = 0;
+                g_OriginalApi->GetDimensionsCount(info, &num_dims);
+                std::vector<int64_t> vdj_shape(num_dims);
+                g_OriginalApi->GetDimensions(info, vdj_shape.data(), num_dims);
+
+                std::string vdjShapeStr;
+                for (size_t j = 0; j < num_dims; j++) {
+                    if (j > 0) vdjShapeStr += ",";
+                    vdjShapeStr += std::to_string(vdj_shape[j]);
+                }
+
+                g_OriginalApi->ReleaseTensorTypeAndShapeInfo(info);
+
+                // Calculate our data size
+                size_t our_element_count = 1;
+                for (int64_t dim : tensorToUse->shape) {
+                    our_element_count *= (size_t)dim;
+                }
+
+                FileLog("VDJ buffer shape=[%s] elements=%zu, our data elements=%zu\n",
+                        vdjShapeStr.c_str(), vdj_element_count, our_element_count);
+
+                // Copy data - use the smaller of the two sizes for safety
+                size_t copy_elements = (vdj_element_count < our_element_count) ? vdj_element_count : our_element_count;
+                size_t copy_bytes = copy_elements * sizeof(float);
+
+                if (vdj_data && tensorToUse->data.size() >= copy_bytes) {
+                    memcpy(vdj_data, tensorToUse->data.data(), copy_bytes);
+                    FileLog("Copied %zu bytes to VDJ buffer\n", copy_bytes);
+                } else {
+                    FileLog("FAILED: vdj_data=%p, our_data_size=%zu, needed=%zu\n",
+                            vdj_data, tensorToUse->data.size(), copy_bytes);
                 }
             }
-            if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to create output tensor");
-            return nullptr;
+        } else {
+            // VDJ didn't pre-allocate - create new OrtValue (fallback)
+            FileLog("VDJ did NOT pre-allocate output[%zu], creating new OrtValue\n", i);
+
+            // If we squeezed batch dimension from input, add it back to outputs
+            if (squeezed_batch_dim && tensorToUse->shape.size() == 2) {
+                FileLog("Restoring batch dimension for output %zu\n", i);
+                tensorToUse->shape.insert(tensorToUse->shape.begin(), 1);
+            }
+
+            void* buffer = nullptr;
+            OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, *tensorToUse, &buffer);
+            if (!ort_value) {
+                FileLog("FAILED to create output OrtValue %zu\n", i);
+                if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to create output tensor");
+                return nullptr;
+            }
+            FileLog("Created OrtValue %zu successfully: ptr=%p\n", i, (void*)ort_value);
+            outputs[i] = ort_value;
         }
-        FileLog("Created OrtValue %zu successfully: ptr=%p\n", i, (void*)ort_value);
-        outputs[i] = ort_value;
-        // Note: buffer is nullptr when using ORT's internal allocator (CreateTensorAsOrtValue)
-        // ORT manages the memory internally, so we don't need to track it
     }
 
     FileLog("Remote inference SUCCESS - returned %zu outputs to VDJ\n", output_names_len);
