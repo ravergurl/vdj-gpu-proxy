@@ -14,6 +14,47 @@
 #include <vector>
 #include <string>
 #include <atomic>
+#include <fstream>
+
+// File-based logging for debugging
+static void FileLog(const char* fmt, ...) {
+    static FILE* logFile = nullptr;
+    static bool logInitialized = false;
+
+    if (!logInitialized) {
+        char logPath[MAX_PATH];
+        char* localAppData = nullptr;
+        size_t len = 0;
+        if (_dupenv_s(&localAppData, &len, "LOCALAPPDATA") == 0 && localAppData) {
+            snprintf(logPath, MAX_PATH, "%s\\VDJ-GPU-Proxy.log", localAppData);
+            free(localAppData);
+        } else {
+            strcpy_s(logPath, "C:\\VDJ-GPU-Proxy.log");
+        }
+        logFile = fopen(logPath, "a");
+        logInitialized = true;
+    }
+
+    if (logFile) {
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        fprintf(logFile, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(logFile, fmt, args);
+        va_end(args);
+        fflush(logFile);
+    }
+
+    // Also OutputDebugString
+    char buf[1024];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    OutputDebugStringA(buf);
+}
 
 // OrtStatusPtr typedef for convenience
 typedef OrtStatus* OrtStatusPtr;
@@ -316,7 +357,7 @@ static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Paramete
 }
 
 const OrtApiBase* ORT_API_CALL OrtGetApiBase(void) noexcept {
-    OutputDebugStringA("VDJ-GPU-Proxy: OrtGetApiBase called\n");
+    FileLog("OrtGetApiBase called\n");
     
     InitOnceExecuteOnce(&g_ProxyInitOnce, InitializeProxyCallback, NULL, NULL);
     
@@ -429,7 +470,11 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     size_t output_names_len,
     OrtValue** outputs
 ) noexcept {
+    FileLog("HookedRun called: inputs=%zu, outputs=%zu, enabled=%d, vdjStemMode=%d\n",
+            input_len, output_names_len, g_Config.enabled ? 1 : 0, g_UseVdjStemMode ? 1 : 0);
+
     if (!g_Config.enabled) {
+        FileLog("Proxy disabled, using local\n");
         return g_OriginalRun(session, run_options, input_names, inputs,
                             input_len, output_names, output_names_len, outputs);
     }
@@ -554,33 +599,33 @@ OrtStatusPtr ORT_API_CALL HookedRun(
 
         // Check if VDJStem mode is enabled
         if (g_UseVdjStemMode && !httpInputs.empty()) {
-            OutputDebugStringA("VDJ-GPU-Proxy: Using VDJStem mode\n");
+            FileLog("VDJStem mode active, httpInputs=%zu\n", httpInputs.size());
 
             // Get the track path from file monitor
             std::string trackPath = vdj::GetLastAudioFilePath();
             std::string trackDir = vdj::GetLastAudioFileDirectory();
 
-            char pathMsg[512];
-            snprintf(pathMsg, sizeof(pathMsg), "VDJ-GPU-Proxy: Track path: %s, dir: %s\n",
-                     trackPath.c_str(), trackDir.c_str());
-            OutputDebugStringA(pathMsg);
+            FileLog("Track path: '%s', dir: '%s'\n", trackPath.c_str(), trackDir.c_str());
 
             // Use track directory if available, otherwise fall back to stems folder
             std::string outputDir = trackDir.empty() ? std::string(g_StemsFolder) : trackDir;
+            FileLog("Output dir: '%s'\n", outputDir.c_str());
 
             // Create VDJStem file and get tensors
+            FileLog("Calling CreateVdjStem...\n");
             vdj::VdjStemResult stemResult = vdj::GetHttpClient()->CreateVdjStem(
                 session_id, httpInputs[0], outputDir, trackPath
             );
+
+            FileLog("CreateVdjStem returned: success=%d, error='%s', hash='%s', path='%s'\n",
+                    stemResult.success ? 1 : 0, stemResult.error_message.c_str(),
+                    stemResult.audio_hash.c_str(), stemResult.local_path.c_str());
 
             inferenceSuccess = stemResult.success;
             errorMessage = stemResult.error_message;
 
             if (stemResult.success) {
-                char msg[512];
-                snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: VDJStem created - hash=%s, path=%s\n",
-                         stemResult.audio_hash.c_str(), stemResult.local_path.c_str());
-                OutputDebugStringA(msg);
+                FileLog("VDJStem SUCCESS - outputs=%zu\n", stemResult.outputs.size());
 
                 // Return tensors to VDJ for immediate use
                 // The .vdjstem file is also saved for future caching
@@ -591,8 +636,12 @@ OrtStatusPtr ORT_API_CALL HookedRun(
                     td.data = std::move(ht.data);
                     outputTensors.push_back(std::move(td));
                 }
+            } else {
+                FileLog("VDJStem FAILED\n");
             }
         } else {
+            FileLog("NOT using VDJStem mode (vdjStemMode=%d, httpInputs=%zu)\n",
+                    g_UseVdjStemMode ? 1 : 0, httpInputs.size());
             // Standard binary inference (no VDJStem file creation)
             vdj::HttpInferenceResult httpResult = vdj::GetHttpClient()->RunInferenceBinary(
                 session_id, input_name_vec, httpInputs, output_name_vec
