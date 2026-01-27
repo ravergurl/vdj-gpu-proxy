@@ -770,13 +770,10 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to create output tensor");
             return nullptr;
         }
-        FileLog("Created OrtValue %zu successfully: ptr=%p buffer=%p\n", i, (void*)ort_value, buffer);
+        FileLog("Created OrtValue %zu successfully: ptr=%p\n", i, (void*)ort_value);
         outputs[i] = ort_value;
-        if (buffer && g_BufferLockInitialized) {
-            EnterCriticalSection(&g_BufferLock);
-            g_AllocatedBuffers.push_back(buffer);
-            LeaveCriticalSection(&g_BufferLock);
-        }
+        // Note: buffer is nullptr when using ORT's internal allocator (CreateTensorAsOrtValue)
+        // ORT manages the memory internally, so we don't need to track it
     }
 
     FileLog("Remote inference SUCCESS - returned %zu outputs to VDJ\n", output_names_len);

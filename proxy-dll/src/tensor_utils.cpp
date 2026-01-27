@@ -2,6 +2,9 @@
 #include "../include/onnxruntime_c_api.h"
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
+#include <cstdio>
+#include <windows.h>
 
 namespace vdj {
 
@@ -96,14 +99,14 @@ OrtValue* CreateOrtValue(
     if (!api || !out_buffer) {
         return nullptr;
     }
-    
+
     *out_buffer = nullptr;
-    
+
     size_t element_size = GetElementSize(tensor.dtype);
     if (element_size == 0) {
         return nullptr;
     }
-    
+
     size_t total_elements = 1;
     for (int64_t dim : tensor.shape) {
         if (dim <= 0) {
@@ -114,54 +117,74 @@ OrtValue* CreateOrtValue(
         }
         total_elements *= static_cast<size_t>(dim);
     }
-    
+
     if (total_elements > SIZE_MAX / element_size) {
         return nullptr;
     }
     size_t buffer_size = total_elements * element_size;
-    
+
     if (tensor.data.size() < buffer_size) {
         return nullptr;
     }
 
-    *out_buffer = malloc(buffer_size);
-    if (!*out_buffer) {
-        return nullptr;
+    // Validate data - check for NaN/Inf in float data
+    if (tensor.dtype == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+        const float* fdata = reinterpret_cast<const float*>(tensor.data.data());
+        size_t num_floats = buffer_size / sizeof(float);
+        bool has_invalid = false;
+        float min_val = fdata[0], max_val = fdata[0];
+        for (size_t i = 0; i < num_floats && i < 1000; i++) {  // Check first 1000
+            if (std::isnan(fdata[i]) || std::isinf(fdata[i])) {
+                has_invalid = true;
+                break;
+            }
+            if (fdata[i] < min_val) min_val = fdata[i];
+            if (fdata[i] > max_val) max_val = fdata[i];
+        }
+        // Log data stats for debugging (will be visible in DebugView)
+        char msg[256];
+        snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Tensor data stats - min=%.4f max=%.4f invalid=%d\n",
+                 min_val, max_val, has_invalid ? 1 : 0);
+        OutputDebugStringA(msg);
     }
 
-    memcpy(*out_buffer, tensor.data.data(), buffer_size);
-
-    OrtMemoryInfo* mem_info = nullptr;
-    OrtStatus* status = api->CreateMemoryInfo("Cpu", OrtArenaAllocator, 0, OrtMemTypeDefault, &mem_info);
+    // Use ORT's internal allocator - this is what the session uses
+    OrtAllocator* allocator = nullptr;
+    OrtStatus* status = api->GetAllocatorWithDefaultOptions(&allocator);
     if (status) {
         api->ReleaseStatus(status);
-        free(*out_buffer);
-        *out_buffer = nullptr;
         return nullptr;
     }
 
+    // Create tensor using ORT's allocator (internally managed memory)
     OrtValue* ort_value = nullptr;
-    status = api->CreateTensorWithDataAsOrtValue(
-        mem_info,
-        *out_buffer,
-        buffer_size,
+    status = api->CreateTensorAsOrtValue(
+        allocator,
         tensor.shape.data(),
         tensor.shape.size(),
         static_cast<ONNXTensorElementDataType>(tensor.dtype),
         &ort_value
     );
 
-    api->ReleaseMemoryInfo(mem_info);
-
     if (status) {
         api->ReleaseStatus(status);
-        free(*out_buffer);
-        *out_buffer = nullptr;
-        if (ort_value) {
-            api->ReleaseValue(ort_value);
-        }
         return nullptr;
     }
+
+    // Get pointer to internal buffer and copy our data
+    void* ort_data = nullptr;
+    status = api->GetTensorMutableData(ort_value, &ort_data);
+    if (status) {
+        api->ReleaseStatus(status);
+        api->ReleaseValue(ort_value);
+        return nullptr;
+    }
+
+    // Copy our data into ORT's buffer
+    memcpy(ort_data, tensor.data.data(), buffer_size);
+
+    // out_buffer is not used with this approach, but keep for API compatibility
+    *out_buffer = nullptr;
 
     return ort_value;
 }
