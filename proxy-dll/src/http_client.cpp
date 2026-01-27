@@ -1013,13 +1013,13 @@ VdjStemResult HttpClient::CreateVdjStem(
 
             // Determine output path - prefer track path, fallback to hash-based
             if (!track_path.empty()) {
-                // Name based on track: track.mp3 -> track.vdjstem
+                // Name based on track: track.mp3 -> track.vdjstems
                 std::string baseName = track_path;
                 size_t lastDot = baseName.find_last_of('.');
                 if (lastDot != std::string::npos) {
                     baseName = baseName.substr(0, lastDot);
                 }
-                result.local_path = baseName + ".vdjstem";
+                result.local_path = baseName + ".vdjstems";
                 DebugLog("HTTP: Saving stem next to track: %s\n", result.local_path.c_str());
             } else {
                 // Fallback: save in output_dir with hash-based name
@@ -1027,7 +1027,7 @@ VdjStemResult HttpClient::CreateVdjStem(
                 std::string stemDir = output_dir + "\\" + subdir;
                 CreateDirectoryA(output_dir.c_str(), NULL);
                 CreateDirectoryA(stemDir.c_str(), NULL);
-                result.local_path = stemDir + "\\" + result.audio_hash + ".vdjstem";
+                result.local_path = stemDir + "\\" + result.audio_hash + ".vdjstems";
                 DebugLog("HTTP: Saving stem with hash name: %s\n", result.local_path.c_str());
             }
 
@@ -1106,13 +1106,13 @@ VdjStemResult HttpClient::CreateVdjStem(
 
             // Determine output path - prefer track path, fallback to hash-based
             if (!track_path.empty()) {
-                // Name based on track: track.mp3 -> track.vdjstem
+                // Name based on track: track.mp3 -> track.vdjstems
                 std::string baseName = track_path;
                 size_t lastDot = baseName.find_last_of('.');
                 if (lastDot != std::string::npos) {
                     baseName = baseName.substr(0, lastDot);
                 }
-                result.local_path = baseName + ".vdjstem";
+                result.local_path = baseName + ".vdjstems";
                 DebugLog("HTTP: Will save stem next to track: %s\n", result.local_path.c_str());
             } else {
                 // Fallback: save in output_dir with hash-based name
@@ -1120,7 +1120,7 @@ VdjStemResult HttpClient::CreateVdjStem(
                 std::string stemDir = output_dir + "\\" + subdir;
                 CreateDirectoryA(output_dir.c_str(), NULL);
                 CreateDirectoryA(stemDir.c_str(), NULL);
-                result.local_path = stemDir + "\\" + result.audio_hash + ".vdjstem";
+                result.local_path = stemDir + "\\" + result.audio_hash + ".vdjstems";
                 DebugLog("HTTP: Will save stem with hash name: %s\n", result.local_path.c_str());
             }
 

@@ -67,6 +67,7 @@ static bool WriteWavFile(const std::string& path, const float* data,
 
 // Run ffmpeg to create MP4 with multiple audio streams
 static bool RunFfmpeg(const std::vector<std::string>& wav_files,
+                      const std::vector<std::string>& stream_titles,
                       const std::string& output_path) {
     // Build ffmpeg command
     std::stringstream cmd;
@@ -81,7 +82,13 @@ static bool RunFfmpeg(const std::vector<std::string>& wav_files,
         cmd << " -map " << i << ":a";
     }
 
-    cmd << " -c:a aac -b:a 192k -ar 44100 -ac 2 \"" << output_path << "\"";
+    // Add metadata title for each stream (required by VDJ)
+    for (size_t i = 0; i < stream_titles.size(); i++) {
+        cmd << " -metadata:s:" << i << " title=" << stream_titles[i];
+    }
+
+    // Max quality: 320k bitrate per stream
+    cmd << " -c:a aac -b:a 320k -ar 44100 -ac 2 \"" << output_path << "\"";
 
     std::string cmdStr = cmd.str();
     DebugLog("VDJStem: Running ffmpeg: %s\n", cmdStr.c_str());
@@ -143,12 +150,25 @@ bool CreateVdjStemFile(
 
     std::string tempBase = std::string(tempDir) + "vdjstem_";
 
-    // Stem order for VDJ: vocals, other (instruments), bass, drums
-    const char* stem_order[] = {"vocals", "other", "bass", "drums"};
+    // Stem mapping: model output name -> VDJ stream title
+    // VDJ expects specific stream titles: vocal, instruments, bass, drums (or hihat/kick)
+    struct StemMapping {
+        const char* model_name;   // Name from model/server
+        const char* vdj_title;    // Title for VDJ stream metadata
+    };
+    const StemMapping stem_mappings[] = {
+        {"vocals", "vocal"},      // Model "vocals" -> VDJ "vocal" (no 's')
+        {"other", "instruments"}, // Model "other" -> VDJ "instruments"
+        {"bass", "bass"},
+        {"drums", "drums"}
+    };
+
     std::vector<std::string> wav_files;
+    std::vector<std::string> stream_titles;
 
     // Write each stem as WAV
-    for (const char* stem_name : stem_order) {
+    for (const auto& mapping : stem_mappings) {
+        const char* stem_name = mapping.model_name;
         // Find this stem in the input
         const std::vector<float>* stem_data = nullptr;
         for (const auto& s : stems) {
@@ -186,7 +206,8 @@ bool CreateVdjStemFile(
         }
 
         wav_files.push_back(wav_path);
-        DebugLog("VDJStem: Wrote %s (%zu samples)\n", wav_path.c_str(), total_samples);
+        stream_titles.push_back(mapping.vdj_title);
+        DebugLog("VDJStem: Wrote %s (%zu samples) -> title=%s\n", wav_path.c_str(), total_samples, mapping.vdj_title);
     }
 
     // Create output directory
@@ -197,7 +218,7 @@ bool CreateVdjStemFile(
     }
 
     // Run ffmpeg to create MP4
-    bool success = RunFfmpeg(wav_files, output_path);
+    bool success = RunFfmpeg(wav_files, stream_titles, output_path);
 
     // Clean up temp WAV files
     for (const auto& wav : wav_files) {
@@ -232,7 +253,7 @@ std::string ComputeAudioHash(const float* audio_data, size_t num_samples) {
 
 std::string GetVdjStemPath(const std::string& audio_hash, const std::string& stems_folder) {
     std::string subdir = audio_hash.substr(0, 2);
-    return stems_folder + "\\" + subdir + "\\" + audio_hash + ".vdjstem";
+    return stems_folder + "\\" + subdir + "\\" + audio_hash + ".vdjstems";
 }
 
 bool VdjStemExists(const std::string& audio_hash, const std::string& stems_folder) {
