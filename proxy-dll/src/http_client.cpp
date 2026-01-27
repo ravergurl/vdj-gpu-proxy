@@ -13,14 +13,43 @@
 
 namespace vdj {
 
-// Debug logging helper
+// File-based logging helper (writes to %LOCALAPPDATA%\VDJ-GPU-Proxy.log)
 static void DebugLog(const char* fmt, ...) {
-    char buf[1024];
+    static FILE* logFile = nullptr;
+    static bool logInitialized = false;
+    static std::mutex logMutex;
+
+    std::lock_guard<std::mutex> lock(logMutex);
+
+    if (!logInitialized) {
+        char logPath[MAX_PATH];
+        char* localAppData = nullptr;
+        size_t len = 0;
+        if (_dupenv_s(&localAppData, &len, "LOCALAPPDATA") == 0 && localAppData) {
+            snprintf(logPath, MAX_PATH, "%s\\VDJ-GPU-Proxy.log", localAppData);
+            free(localAppData);
+        } else {
+            strcpy_s(logPath, "C:\\VDJ-GPU-Proxy.log");
+        }
+        logFile = fopen(logPath, "a");
+        logInitialized = true;
+    }
+
+    char buf[2048];
     va_list args;
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
+
     OutputDebugStringA(buf);
+
+    if (logFile) {
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        fprintf(logFile, "[%02d:%02d:%02d.%03d] %s",
+                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, buf);
+        fflush(logFile);
+    }
 }
 
 namespace {
