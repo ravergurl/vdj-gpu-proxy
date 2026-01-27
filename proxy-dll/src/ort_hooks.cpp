@@ -513,14 +513,13 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         input_tensors.push_back(std::move(td));
     }
 
-    // If no 2D audio input found (e.g., only 4D spectrograms), use local inference
+    // If no 2D audio input found (e.g., only 4D spectrograms), allow local for analysis
     // VDJ makes multiple types of calls: stems separation (2D audio) and analysis (4D spectrograms)
-    // Server only handles stems separation, so fallback for analysis calls
+    // Server only handles stems separation - let analysis run locally
     if (!has_2d_audio) {
-        FileLog("Analysis call detected (spectrogram) - blocking local, remote only\n");
-        // Even for analysis, block local and require remote
-        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Local inference blocked - remote server required");
-        return nullptr;
+        FileLog("Analysis call (spectrogram) - allowing local\n");
+        return g_OriginalRun(session, run_options, input_names, inputs,
+                            input_len, output_names, output_names_len, outputs);
     }
 
     // Log what VDJ actually requested
