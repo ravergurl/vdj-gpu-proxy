@@ -1,0 +1,59 @@
+# Current Tunnel Configuration Analysis
+
+## Tunnel ID: 926eac5e-2642-4a16-9edc-c06b6c705ab8
+## Config Source: cloudflare (managed)
+## Ingress Rules: 12 total
+
+### Active Services
+| Hostname | Service | Port |
+|----------|---------|------|
+| rdp.ai-smith.net | tcp://localhost:3389 | 3389 |
+| http.ai-smith.net | tcp://localhost:80 | 80 |
+| https.ai-smith.net | tcp://localhost:443 | 443 |
+| alt1.ai-smith.net | tcp://localhost:8080 | 8080 |
+| alt2.ai-smith.net | tcp://localhost:8443 | 8443 |
+| iis.ai-smith.net | tcp://localhost:8000 | 8000 |
+| api.ai-smith.net | tcp://localhost:5000 | 5000 |
+| node.ai-smith.net | tcp://localhost:3000 | 3000 |
+| db.ai-smith.net | tcp://localhost:1433 | 1433 |
+| mysql.ai-smith.net | tcp://localhost:3306 | 3306 |
+| vnc.ai-smith.net | tcp://localhost:5900 | 5900 |
+| postgres.ai-smith.net | tcp://localhost:5432 | 5432 |
+
+### WARP Routing: ENABLED
+- Virtual Network: kalvin
+- Gateway: 162.159.36.1, 162.159.46.1
+
+## Routes Configured (Non-Default)
+
+### 10.128.0.0/32 (Single IP)
+- Tunnel: vdj-local
+- Comment: "VDJ gRPC Server - localhost mapping"
+- Virtual Network: kalvin
+
+### 192.168.1.0/24 (Remote Server LAN)
+- Tunnel: home
+- Comment: "Remote server LAN"
+- Virtual Network: kalvin
+
+## API Capabilities We Have
+
+- Read/Write Tunnel Configuration ✅
+- Read/Write Access Policies ❌ (Access API failed)
+- Create/Modify Routes ✅
+- Manage Virtual Networks ✅
+- WARP Client Control ❌ (need client-side)
+
+## Strategic Options
+
+### Option 1: Add New Ingress Rules
+Try adding a service that routes to a different local port or protocol.
+
+### Option 2: Modify Existing Routes
+Point existing hostnames to different ports.
+
+### Option 3: Route Manipulation
+Use routes to direct traffic through other networks.
+
+### Option 4: Cloudflare Access
+Enable Access policies on RDP endpoint (requires Access permissions, which we may not have).

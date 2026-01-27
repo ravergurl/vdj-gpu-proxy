@@ -1,0 +1,239 @@
+================================================================================
+RUSTDESK REMOTE ACCESS - EXECUTIVE SUMMARY
+================================================================================
+Date: January 8, 2025
+Scenario: RustDesk GUI running, ports 21115-21119 blocked, RDP available
+
+================================================================================
+DOCUMENTATION CREATED
+================================================================================
+
+1. RUSTDESK_INDEX.md (286 lines)
+   - Master index with quick start guides
+   - Command reference by category
+   - Port reference table
+   - Configuration file locations
+   - Environment variables
+   - Access methods ranked by reliability
+   - Troubleshooting guide
+   - Learning path (beginner to advanced)
+   - Verification checklist
+
+2. RUSTDESK_REMOTE_ACCESS_GUIDE.md (339 lines)
+   - Comprehensive guide with detailed PowerShell scripts
+   - 17 major sections covering all access methods
+   - Step-by-step instructions for each scenario
+   - Registry keys and configuration details
+   - Firewall bypass strategies
+   - Quick reference commands
+   - Troubleshooting procedures
+
+3. RUSTDESK_METHODS_SUMMARY.txt (228 lines)
+   - Quick reference guide (condensed format)
+   - All commands and methods in one place
+   - Easy copy-paste format
+   - Comparison table of access methods
+   - Critical ports reference
+
+TOTAL: 853 lines of comprehensive documentation
+
+================================================================================
+TOP 7 METHODS TO ACCESS REMOTE WINDOWS MACHINE
+================================================================================
+
+METHOD 1: EXTRACT RUSTDESK ID (COMMAND LINE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Command:
+  cd $env:ProgramFiles\RustDesk\
+  .\rustdesk.exe --get-id | Out-String
+
+Alternative (if output suppressed):
+  C:\Program Files\RustDesk\rustdesk.exe --get-id | more
+
+Remote via RDP:
+  $session = New-PSSession -ComputerName [IP] -Credential [CRED]
+  Invoke-Command -Session $session -ScriptBlock {
+    cd $env:ProgramFiles\RustDesk\
+    .\rustdesk.exe --get-id
+  }
+
+File Location (if command fails):
+  C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config
+  (Look for: id = '[number]')
+
+Status: ✅ FASTEST - Works immediately
+Ports: 3389 (RDP to execute command)
+Encryption: Yes (via RDP)
+
+================================================================================
+
+METHOD 2: DIRECT IP CONNECTION (SAME LAN)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Steps:
+  1. On remote machine: Settings → Security → "Enable direct IP access"
+  2. On client: Enter local IP instead of RustDesk ID
+     Example: 192.168.1.100 (instead of 1234567890)
+  3. Connect
+
+PowerShell to enable (remote):
+  $session = New-PSSession -ComputerName [IP] -Credential [CRED]
+  Invoke-Command -Session $session -ScriptBlock {
+    $config = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config"
+    $content = Get-Content $config
+    $content = $content -replace "direct-server = 'N'", "direct-server = 'Y'"
+    Set-Content -Path $config -Value $content
+    Restart-Service -Name Rustdesk -Force
+  }
+
+Status: ✅ FASTEST - Instant connection
+Ports: 21118 (direct IP), 3389 (RDP for setup)
+Encryption: No (but fast)
+Limitation: Same LAN only
+
+================================================================================
+
+METHOD 3: RDP FALLBACK (MOST RELIABLE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Enable RDP on remote:
+  reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server" `
+      /v fDenyTSConnections /t REG_DWORD /d 0 /f
+  
+  REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" `
+      /v fSingleSessionPerUser /t REG_DWORD /d 0 /f
+  
+  net localgroup "Remote Desktop Users" [USERNAME] /add
+
+Connect:
+  mstsc /v:[TARGET_IP]
+  OR
+  xfreerdp /u:[USERNAME] /p:[PASSWORD] /v:[TARGET_IP]
+
+Status: ✅ MOST RELIABLE - Standard Windows protocol
+Ports: 3389 (RDP)
+Encryption: Yes
+Limitation: Requires RDP enabled on remote
+
+================================================================================
+
+METHOD 4: PORT FORWARDING (SSH/RDP TUNNELING)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SSH Tunneling:
+  rustdesk --port-forward 2222 127.0.0.1 22
+  Then: ssh -p 2222 user@localhost
+
+RDP Tunneling:
+  rustdesk --port-forward 3389 127.0.0.1 3389
+  Then: mstsc /v:localhost
+
+Web Server Tunneling:
+  rustdesk --port-forward 8080 127.0.0.1 80
+  Then: http://localhost:8080
+
+GUI Method:
+  1. Establish RustDesk connection
+  2. Click lightning bolt icon
+  3. Configure port forwarding
+
+Status: ✅ FLEXIBLE - Works for any TCP service
+Ports: 21115-21119 (RustDesk), then custom local ports
+Encryption: Yes
+Limitation: Requires active RustDesk connection
+
+================================================================================
+
+METHOD 5: HEADLESS SERVICE MODE (PERSISTENT)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Install as Windows Service:
+  cd $env:ProgramFiles\RustDesk\
+  .\rustdesk.exe --install-service
+  .\rustdesk.exe --password MyPassword123
+  Start-Service -Name Rustdesk
+
+Verify:
+  Get-Service -Name Rustdesk
+
+Get ID:
+  .\rustdesk.exe --get-id
+
+Status: ✅ PERSISTENT - Runs without GUI
+Ports: 21115-21119 (RustDesk)
+Encryption: Yes
+Limitation: Requires initial setup
+
+================================================================================
+
+METHOD 6: RELAY SERVER (ALWAYS WORKS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Configure Custom Relay:
+  Settings → Network → ID/Relay Server
+  Enter: hostname/IP and key
+
+Force Relay (disable P2P):
+  Settings → Network → "Always use relay"
+
+Via Config File:
+  $config = "C:\Users\[USER]\AppData\Roaming\RustDesk\config"
+  Add-Content -Path $config -Value "[relay]`nport_range = `"21114-21119`""
+
+Status: ✅ ALWAYS WORKS - Works across networks
+Ports: 21117 (relay), 21119 (websocket)
+Encryption: Yes
+Limitation: Slower than direct connection
+
+================================================================================
+
+METHOD 7: TERMINAL ACCESS (v1.4.1+, CLI ONLY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Launch Remote Terminal:
+  rustdesk --terminal
+
+With Admin Privileges:
+  $env:IS_TERMINAL_ADMIN = "1"
+  rustdesk --terminal
+
+Headless Terminal:
+  rustdesk --terminal --cm-no-ui
+
+Requirements:
+  - Permanent password configured
+  - RustDesk service running
+  - No GUI required
+
+Status: ✅ LIGHTWEIGHT - No display needed
+Ports: 21115-21119 (RustDesk)
+Encryption: Yes
+Limitation: CLI only, limited functionality
+
+================================================================================
+CRITICAL PORTS REFERENCE
+================================================================================
+
+Port  | Protocol | Service | Purpose                    | Blockable
+------|----------|---------|----------------------------|----------
+21114 | TCP      | hbbs    | HTTP (Pro only)            | Yes
+21115 | TCP      | hbbs    | NAT type test              | Yes
+21116 | TCP/UDP  | hbbs    | ID registration, heartbeat | Yes
+21117 | TCP      | hbbr    | Relay service              | Yes
+21118 | TCP      | hbbs    | Web client support         | Yes
+21119 | TCP      | hbbr    | Web client relay           | Yes
+3389  | TCP      | RDP     | Remote Desktop Protocol    | Sometimes
+
+================================================================================
+QUICK DECISION TREE
+================================================================================
+
+Q: Are ports 21115-21119 accessible?
+├─ YES → Use RustDesk ID directly (fastest)
+└─ NO → Continue below
+
+Q: Are you on the same LAN?
+├─ YES → Use Direct IP Connection (fastest, unencrypted)
+└─ NO → Continue below
+
+Q: Is RDP (port 3389) accessible?
+├─ YES → Use RDP Fallback (most reliable)
+└─ NO → Continue below
+
+Q: Do you have an active RustDesk connection?
+├─ YES → Use Port Forwarding (flexible)
+└─ NO → Continue below

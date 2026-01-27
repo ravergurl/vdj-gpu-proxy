@@ -492,14 +492,21 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             return nullptr;
         }
 
+        // Log input shape
+        std::string shapeStr;
+        for (size_t j = 0; j < td.shape.size(); j++) {
+            if (j > 0) shapeStr += ",";
+            shapeStr += std::to_string(td.shape[j]);
+        }
+        FileLog("Input[%zu] '%s' shape=[%s] dtype=%d dataLen=%zu\n",
+                i, input_names[i], shapeStr.c_str(), td.dtype, td.data.size());
+
         // Check if this is 2D audio tensor (channels, samples) or 3D with batch
         // Server expects 2D audio tensor (channels, samples)
         // If first dimension is 1 (batch size), squeeze it out
         if (i == 0 && td.shape.size() == 3 && td.shape[0] == 1) {
-            char msg[128];
-            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Squeezing batch dimension from input[0]: [%lld,%lld,%lld] -> [%lld,%lld]\n",
+            FileLog("Squeezing batch dim: [%lld,%lld,%lld] -> [%lld,%lld]\n",
                      td.shape[0], td.shape[1], td.shape[2], td.shape[1], td.shape[2]);
-            OutputDebugStringA(msg);
 
             // Remove first dimension
             td.shape.erase(td.shape.begin());
@@ -703,14 +710,23 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         // If we squeezed batch dimension from input, add it back to outputs
         // VDJ expects same shape format: [1, channels, samples]
         if (squeezed_batch_dim && tensorToUse->shape.size() == 2) {
-            FileLog("Restoring batch dimension\n");
+            FileLog("Restoring batch dimension for output %zu\n", i);
             tensorToUse->shape.insert(tensorToUse->shape.begin(), 1);
         }
+
+        // Log final output shape
+        std::string outShapeStr;
+        for (size_t j = 0; j < tensorToUse->shape.size(); j++) {
+            if (j > 0) outShapeStr += ",";
+            outShapeStr += std::to_string(tensorToUse->shape[j]);
+        }
+        FileLog("Creating OrtValue for output %zu '%s': shape=[%s] dtype=%d dataLen=%zu\n",
+                i, output_names[i], outShapeStr.c_str(), tensorToUse->dtype, tensorToUse->data.size());
 
         void* buffer = nullptr;
         OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, *tensorToUse, &buffer);
         if (!ort_value) {
-            FileLog("Failed to create output OrtValue %zu\n", i);
+            FileLog("FAILED to create output OrtValue %zu\n", i);
             for (size_t j = 0; j < i; j++) {
                 if (outputs[j]) {
                     g_OriginalApi->ReleaseValue(outputs[j]);
@@ -720,6 +736,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to create output tensor");
             return nullptr;
         }
+        FileLog("Created OrtValue %zu successfully: ptr=%p buffer=%p\n", i, (void*)ort_value, buffer);
         outputs[i] = ort_value;
         if (buffer && g_BufferLockInitialized) {
             EnterCriticalSection(&g_BufferLock);
@@ -728,7 +745,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         }
     }
 
-    OutputDebugStringA("VDJ-GPU-Proxy: Remote inference successful\n");
+    FileLog("Remote inference SUCCESS - returned %zu outputs to VDJ\n", output_names_len);
     return nullptr;
 }
 

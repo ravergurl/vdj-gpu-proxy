@@ -1,0 +1,228 @@
+================================================================================
+RUSTDESK REMOTE ACCESS - ALL METHODS WHEN PORTS 21115-21119 BLOCKED
+================================================================================
+Date: January 8, 2025
+Scenario: RustDesk GUI running, ports blocked, RDP available
+
+================================================================================
+1. EXTRACT RUSTDESK ID - COMMAND LINE METHODS
+================================================================================
+
+PowerShell (Windows):
+  cd $env:ProgramFiles\RustDesk\
+  .\rustdesk.exe --get-id
+  
+  With output capture:
+  .\rustdesk.exe --get-id | Out-String
+  
+  Capture to variable:
+  $id = & "$env:ProgramFiles\RustDesk\rustdesk.exe" --get-id
+  
+  Via piping (if output suppressed):
+  C:\Program Files\RustDesk\rustdesk.exe --get-id | more
+  
+  Redirect to file:
+  C:\Program Files\RustDesk\rustdesk.exe --get-id > C:\temp\id.txt
+
+Batch/CMD:
+  cd "C:\Program Files\RustDesk\"
+  rustdesk.exe --get-id
+
+Remote via RDP + PowerShell:
+  $session = New-PSSession -ComputerName [IP] -Credential [CRED]
+  Invoke-Command -Session $session -ScriptBlock {
+    cd $env:ProgramFiles\RustDesk\
+    .\rustdesk.exe --get-id
+  }
+
+================================================================================
+2. READ ID FROM CONFIG FILES
+================================================================================
+
+Config File Locations:
+  User Profile:    C:\Users\[USERNAME]\AppData\Roaming\RustDesk\config
+  Service Profile: C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config
+
+PowerShell to read:
+  $config = Get-Content "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config"
+  $config | Select-String "^id"
+
+Remote access via RDP:
+  Copy-Item -Path "\[IP]\c$\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config" `
+            -Destination "C:\temp\config" -Force
+  Get-Content "C:\temp\config" | Select-String "^id"
+
+================================================================================
+3. DIRECT IP CONNECTION (BYPASS RELAY)
+================================================================================
+
+Enable on Remote Machine:
+  Settings → Security → "Enable direct IP access"
+  Port 21118 must be accessible
+
+On Client:
+  Enter local IP address instead of RustDesk ID
+  Example: 192.168.1.100 instead of 1234567890
+  Connection is instant but UNENCRYPTED
+
+PowerShell to enable (remote):
+  $session = New-PSSession -ComputerName [IP] -Credential [CRED]
+  Invoke-Command -Session $session -ScriptBlock {
+    $config = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config"
+    $content = Get-Content $config
+    $content = $content -replace "direct-server = 'N'", "direct-server = 'Y'"
+    Set-Content -Path $config -Value $content
+    Restart-Service -Name Rustdesk -Force
+  }
+
+================================================================================
+4. PORT FORWARDING FOR SSH/RDP TUNNELING
+================================================================================
+
+Command Line Syntax:
+  rustdesk --port-forward [LOCAL_PORT] [REMOTE_HOST] [REMOTE_PORT]
+
+Examples:
+  SSH tunneling (local 2222 → remote 22):
+  rustdesk --port-forward 2222 127.0.0.1 22
+  
+  RDP tunneling (local 3389 → remote 3389):
+  rustdesk --port-forward 3389 127.0.0.1 3389
+  
+  Web server (local 8080 → remote 80):
+  rustdesk --port-forward 8080 127.0.0.1 80
+
+GUI Method:
+  1. Establish RustDesk connection
+  2. Click lightning bolt icon in connection popup
+  3. Configure port forwarding
+
+Headless Port Forwarding:
+  $env:RUSTDESK_ID_SERVER = "your.server"
+  rustdesk.exe --port-forward 2222 127.0.0.1 22
+
+================================================================================
+5. HEADLESS MODE (SERVICE WITHOUT GUI)
+================================================================================
+
+Install as Windows Service:
+  cd $env:ProgramFiles\RustDesk\
+  .\rustdesk.exe --install-service
+  .\rustdesk.exe --password MyPassword123
+  Start-Service -Name Rustdesk
+  Get-Service -Name Rustdesk
+
+Service Config Location:
+  C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config
+
+PowerShell Setup Script:
+  $ErrorActionPreference = 'silentlycontinue'
+  net stop rustdesk
+  cd $env:ProgramFiles\RustDesk\
+  .\rustdesk.exe --install-service
+  Start-Sleep -seconds 5
+  .\rustdesk.exe --password MyPassword123
+  $id = & .\rustdesk.exe --get-id
+  net start rustdesk
+  Write-Host "ID: $id"
+
+Linux Headless:
+  sudo rustdesk --option allow-linux-headless Y
+  sudo rustdesk --password MyPassword123
+  sudo rustdesk --get-id
+  sudo systemctl restart rustdesk
+
+================================================================================
+6. RELAY SERVER CONFIGURATION
+================================================================================
+
+Default Ports:
+  ID Server (hbbs):
+    - TCP 21115: NAT type test
+    - TCP 21116: ID registration, heartbeat
+    - UDP 21116: Heartbeat
+    - TCP 21118: Web client support
+  
+  Relay Server (hbbr):
+    - TCP 21117: Relay service
+    - TCP 21119: Web client relay (websocket)
+
+Configure Custom Relay:
+  Via UI: Settings → Network → ID/Relay Server
+  Via config file:
+    $config = "C:\Users\[USER]\AppData\Roaming\RustDesk\config"
+    Add-Content -Path $config -Value "[relay]`nport_range = `"21114-21119`""
+
+Environment Variables (compile-time):
+  $env:RENDEZVOUS_SERVER = "tcp://your.server:21117"
+  $env:RS_PUB_KEY = "your-public-key"
+
+Runtime Configuration:
+  $env:RUSTDESK_ID_SERVER = "your.server"
+  $env:RUSTDESK_RELAY_SERVER = "your.relay.server"
+  & "$env:ProgramFiles\RustDesk\rustdesk.exe"
+
+================================================================================
+7. ALTERNATIVE PORT CONFIGURATIONS
+================================================================================
+
+Configure Custom Port Range:
+  $config = "C:\Users\[USER]\AppData\Roaming\RustDesk\config"
+  $content = Get-Content $config
+  $content += "`n[relay]`nport_range = `"21114-21119`""
+  Set-Content -Path $config -Value $content
+  Restart-Service -Name Rustdesk -Force
+
+Docker Custom Ports:
+  docker run -d \
+    -p 8006:21116 \
+    -p 8006:21116/udp \
+    -p 8007:21117 \
+    -p 8008:21118 \
+    -p 8009:21119 \
+    rustdesk/rustdesk-server
+
+================================================================================
+8. REMOTE ACCESS VIA RDP (FALLBACK WHEN RUSTDESK BLOCKED)
+================================================================================
+
+Enable RDP on Remote Machine:
+  reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server" `
+      /v fDenyTSConnections /t REG_DWORD /d 0 /f
+  
+  REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" `
+      /v fSingleSessionPerUser /t REG_DWORD /d 0 /f
+  
+  net localgroup "Remote Desktop Users" [USERNAME] /add
+  
+  netsh advfirewall set allprofiles state off
+
+Connect via RDP:
+  xfreerdp /u:[USERNAME] /p:[PASSWORD] /v:[TARGET_IP]
+  mstsc /v:[TARGET_IP]
+  $cred = Get-Credential
+  Enter-PSSession -ComputerName [TARGET_IP] -Credential $cred
+
+================================================================================
+9. POWERSHELL/WMI REMOTE SERVICE ENUMERATION
+================================================================================
+
+Check RustDesk Service:
+  Get-Service -Name Rustdesk
+  Get-Service -ComputerName [IP] -Name Rustdesk -Credential [CRED]
+  Get-Service -Name Rustdesk | Select-Object Name, Status, StartType
+
+Enumerate Services (WMI):
+  Get-WmiObject Win32_Service | Where-Object {$_.Name -like "*rust*"}
+  Get-WmiObject -ComputerName [IP] -Credential [CRED] -Class Win32_Service `
+      | Where-Object {$_.Name -like "*rust*"}
+  Get-WmiObject Win32_Service -Filter "Name='Rustdesk'" `
+      | Select-Object Name, State, StartName, PathName
+
+Enumerate RDP Sessions:
+  Get-NetRDPSession -ComputerName [IP]
+  Get-WmiObject -ComputerName [IP] -Class Win32_LoggedOnUser
+  Get-WmiObject -ComputerName [IP] -Class Win32_Process `
+      | Where-Object {$_.Name -like "*rust*"}
+
+===================================================

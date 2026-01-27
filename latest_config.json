@@ -1,0 +1,121 @@
+{
+    "success": true,
+    "errors": [],
+    "messages": [],
+    "result": {
+        "tunnel_id": "926eac5e-2642-4a16-9edc-c06b6c705ab8",
+        "version": 78,
+        "config": {
+            "ingress": [
+                {
+                    "service": "http://localhost:5000",
+                    "hostname": "5000.scan.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:3000",
+                    "hostname": "3000.scan.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:8080",
+                    "hostname": "8080.scan.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:20241",
+                    "hostname": "20241.scan.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:5985",
+                    "hostname": "5985.scan.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:3389",
+                    "hostname": "3389.scan.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:445",
+                    "hostname": "445.scan.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:443",
+                    "hostname": "443.scan.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:80",
+                    "hostname": "80.scan.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:22",
+                    "hostname": "22.scan.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:12345",
+                    "hostname": "test-probe.ai-smith.net"
+                },
+                {
+                    "service": "http://localhost:20241",
+                    "hostname": "metrics.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:445",
+                    "hostname": "smb.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:3389",
+                    "hostname": "rdp.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:80",
+                    "hostname": "http.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:443",
+                    "hostname": "https.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:8080",
+                    "hostname": "alt1.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:8443",
+                    "hostname": "alt2.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:8000",
+                    "hostname": "iis.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:5000",
+                    "hostname": "api.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:3000",
+                    "hostname": "node.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:1433",
+                    "hostname": "db.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:3306",
+                    "hostname": "mysql.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:5900",
+                    "hostname": "vnc.ai-smith.net"
+                },
+                {
+                    "service": "tcp://localhost:5432",
+                    "hostname": "postgres.ai-smith.net"
+                },
+                {
+                    "service": "http_status:404"
+                }
+            ],
+            "warp-routing": {
+                "enabled": true
+            }
+        },
+        "source": "cloudflare",
+        "created_at": "2026-01-09T17:09:03.901785Z"
+    }
+}
