@@ -3,6 +3,7 @@
 #include "http_client.h"
 #include "tensor_utils.h"
 #include "logger.h"
+#include "file_monitor.h"
 #include "../include/onnxruntime_c_api.h"
 #include <windows.h>
 #include <synchapi.h>
@@ -260,6 +261,13 @@ static BOOL CALLBACK InitializeProxyCallback(PINIT_ONCE InitOnce, PVOID Paramete
     
     LoadConfig();
     OutputDebugStringA("VDJ-GPU-Proxy: Config loaded\n");
+
+    // Initialize file monitor to track audio file access
+    if (vdj::InitFileMonitor()) {
+        OutputDebugStringA("VDJ-GPU-Proxy: File monitor initialized\n");
+    } else {
+        OutputDebugStringA("VDJ-GPU-Proxy: File monitor init failed (non-fatal)\n");
+    }
 
     wchar_t modulePath[MAX_PATH];
     HMODULE hSelf = nullptr;
@@ -548,9 +556,21 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         if (g_UseVdjStemMode && !httpInputs.empty()) {
             OutputDebugStringA("VDJ-GPU-Proxy: Using VDJStem mode\n");
 
+            // Get the track path from file monitor
+            std::string trackPath = vdj::GetLastAudioFilePath();
+            std::string trackDir = vdj::GetLastAudioFileDirectory();
+
+            char pathMsg[512];
+            snprintf(pathMsg, sizeof(pathMsg), "VDJ-GPU-Proxy: Track path: %s, dir: %s\n",
+                     trackPath.c_str(), trackDir.c_str());
+            OutputDebugStringA(pathMsg);
+
+            // Use track directory if available, otherwise fall back to stems folder
+            std::string outputDir = trackDir.empty() ? std::string(g_StemsFolder) : trackDir;
+
             // Create VDJStem file and get tensors
             vdj::VdjStemResult stemResult = vdj::GetHttpClient()->CreateVdjStem(
-                session_id, httpInputs[0], std::string(g_StemsFolder)
+                session_id, httpInputs[0], outputDir, trackPath
             );
 
             inferenceSuccess = stemResult.success;

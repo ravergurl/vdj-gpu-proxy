@@ -6,6 +6,7 @@ add_library(onnxruntime SHARED
     src/tensor_utils.cpp
     src/logger.cpp
     src/vdjstem_writer.cpp
+    src/file_monitor.cpp
 )
 
 target_include_directories(onnxruntime PRIVATE

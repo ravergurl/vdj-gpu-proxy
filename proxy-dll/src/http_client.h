@@ -66,11 +66,13 @@ public:
     );
 
     // Create a VDJStem file from audio data
-    // Returns the file saved to the specified stems folder
+    // Saves the .vdjstem file next to the track (if track_path provided)
+    // or in stems_folder/hash.vdjstem as fallback
     VdjStemResult CreateVdjStem(
         uint64_t session_id,
         const HttpTensorData& audio_input,
-        const std::string& stems_folder  // Where to save the file locally
+        const std::string& output_dir,    // Directory to save to (track dir or stems folder)
+        const std::string& track_path = "" // Full path to track (for naming the stem file)
     );
 
 private:

@@ -914,14 +914,15 @@ HttpInferenceResult HttpClient::RunInferenceBinary(
 VdjStemResult HttpClient::CreateVdjStem(
     uint64_t session_id,
     const HttpTensorData& audio_input,
-    const std::string& stems_folder
+    const std::string& output_dir,
+    const std::string& track_path
 ) {
     VdjStemResult result;
     result.success = false;
     result.cache_hit = false;
 
-    DebugLog("HTTP: CreateVdjStem START session=%llu stemsFolder=%s\n",
-             session_id, stems_folder.c_str());
+    DebugLog("HTTP: CreateVdjStem START session=%llu outputDir=%s trackPath=%s\n",
+             session_id, output_dir.c_str(), track_path.c_str());
 
     std::lock_guard<std::mutex> lock(impl_->mutex);
 
@@ -1014,14 +1015,25 @@ VdjStemResult HttpClient::CreateVdjStem(
             offset += stemFileLen;
             result.cache_hit = false;  // File was created
 
-            // Save the file locally
-            std::string subdir = result.audio_hash.substr(0, 2);
-            std::string stemDir = stems_folder + "\\" + subdir;
-
-            CreateDirectoryA(stems_folder.c_str(), NULL);
-            CreateDirectoryA(stemDir.c_str(), NULL);
-
-            result.local_path = stemDir + "\\" + result.audio_hash + ".vdjstem";
+            // Determine output path - prefer track path, fallback to hash-based
+            if (!track_path.empty()) {
+                // Name based on track: track.mp3 -> track.vdjstem
+                std::string baseName = track_path;
+                size_t lastDot = baseName.find_last_of('.');
+                if (lastDot != std::string::npos) {
+                    baseName = baseName.substr(0, lastDot);
+                }
+                result.local_path = baseName + ".vdjstem";
+                DebugLog("HTTP: Saving stem next to track: %s\n", result.local_path.c_str());
+            } else {
+                // Fallback: save in output_dir with hash-based name
+                std::string subdir = result.audio_hash.substr(0, 2);
+                std::string stemDir = output_dir + "\\" + subdir;
+                CreateDirectoryA(output_dir.c_str(), NULL);
+                CreateDirectoryA(stemDir.c_str(), NULL);
+                result.local_path = stemDir + "\\" + result.audio_hash + ".vdjstem";
+                DebugLog("HTTP: Saving stem with hash name: %s\n", result.local_path.c_str());
+            }
 
             HANDLE hFile = CreateFileA(
                 result.local_path.c_str(),
@@ -1096,12 +1108,25 @@ VdjStemResult HttpClient::CreateVdjStem(
                 stem_data.push_back({stem_names[i], std::move(floats)});
             }
 
-            // Create output path
-            std::string subdir = result.audio_hash.substr(0, 2);
-            std::string stemDir = stems_folder + "\\" + subdir;
-            CreateDirectoryA(stems_folder.c_str(), NULL);
-            CreateDirectoryA(stemDir.c_str(), NULL);
-            result.local_path = stemDir + "\\" + result.audio_hash + ".vdjstem";
+            // Determine output path - prefer track path, fallback to hash-based
+            if (!track_path.empty()) {
+                // Name based on track: track.mp3 -> track.vdjstem
+                std::string baseName = track_path;
+                size_t lastDot = baseName.find_last_of('.');
+                if (lastDot != std::string::npos) {
+                    baseName = baseName.substr(0, lastDot);
+                }
+                result.local_path = baseName + ".vdjstem";
+                DebugLog("HTTP: Will save stem next to track: %s\n", result.local_path.c_str());
+            } else {
+                // Fallback: save in output_dir with hash-based name
+                std::string subdir = result.audio_hash.substr(0, 2);
+                std::string stemDir = output_dir + "\\" + subdir;
+                CreateDirectoryA(output_dir.c_str(), NULL);
+                CreateDirectoryA(stemDir.c_str(), NULL);
+                result.local_path = stemDir + "\\" + result.audio_hash + ".vdjstem";
+                DebugLog("HTTP: Will save stem with hash name: %s\n", result.local_path.c_str());
+            }
 
             // Create the file
             if (CreateVdjStemFile(stem_data, result.local_path, 44100)) {
