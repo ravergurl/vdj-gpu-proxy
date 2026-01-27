@@ -564,8 +564,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             FileLog("DIAGNOSTIC: Returning original result for comparison\n");
             return origStatus;
         } else {
-            const char* errMsg = nullptr;
-            g_OriginalApi->GetErrorMessage(origStatus, &errMsg);
+            const char* errMsg = g_OriginalApi->GetErrorMessage(origStatus);
             FileLog("DIAGNOSTIC: Original Run failed: %s\n", errMsg ? errMsg : "unknown");
             g_OriginalApi->ReleaseStatus(origStatus);
         }
