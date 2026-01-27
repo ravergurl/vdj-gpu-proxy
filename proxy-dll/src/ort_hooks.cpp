@@ -75,7 +75,7 @@ static void InitDefaultConfig() {
     strcpy_s(g_Config.server_address, "127.0.0.1");
     g_Config.tunnel_url[0] = '\0';
     g_Config.server_port = 50051;
-    g_Config.fallback_to_local = true;
+    g_Config.fallback_to_local = false;  // NEVER fallback to local inference
     g_Config.enabled = true;
     g_Config.use_tunnel = false;
 
@@ -474,29 +474,32 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             input_len, output_names_len, g_Config.enabled ? 1 : 0, g_UseVdjStemMode ? 1 : 0);
 
     if (!g_Config.enabled) {
-        FileLog("Proxy disabled, using local\n");
-        return g_OriginalRun(session, run_options, input_names, inputs,
-                            input_len, output_names, output_names_len, outputs);
+        FileLog("Proxy disabled - but local inference blocked, returning error\n");
+        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Proxy disabled and local inference blocked");
+        return nullptr;
     }
 
+    FileLog("TryConnectToServer... tunnel_url='%s'\n", g_Config.tunnel_url);
     TryConnectToServer();
 
     // Check connection based on which client we're using
     bool isConnected = false;
     if (g_UsingHttpClient) {
         isConnected = vdj::GetHttpClient()->IsConnected();
+        FileLog("HTTP client connected=%d\n", isConnected ? 1 : 0);
     } else {
         isConnected = vdj::GetGrpcClient()->IsConnected();
+        FileLog("gRPC client connected=%d\n", isConnected ? 1 : 0);
     }
 
     if (!isConnected) {
-        if (g_Config.fallback_to_local) {
-            return g_OriginalRun(session, run_options, input_names, inputs,
-                                input_len, output_names, output_names_len, outputs);
-        }
-        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "GPU server not connected");
+        FileLog("NOT CONNECTED - BLOCKING local inference, must use remote\n");
+        // NEVER allow local inference - always require remote server
+        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Remote GPU server not connected - local inference disabled");
         return nullptr;
     }
+
+    FileLog("Connected! Proceeding with remote inference\n");
 
     // Extract input tensors
     std::vector<std::string> input_name_vec;
@@ -509,11 +512,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         input_name_vec.push_back(input_names[i]);
         vdj::TensorData td = vdj::ExtractTensorData(g_OriginalApi, inputs[i]);
         if (td.shape.empty()) {
-            OutputDebugStringA("VDJ-GPU-Proxy: Failed to extract input tensor\n");
-            if (g_Config.fallback_to_local) {
-                return g_OriginalRun(session, run_options, input_names, inputs,
-                                    input_len, output_names, output_names_len, outputs);
-            }
+            FileLog("Failed to extract input tensor %zu\n", i);
             if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to extract input tensor");
             return nullptr;
         }
@@ -543,15 +542,9 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     // VDJ makes multiple types of calls: stems separation (2D audio) and analysis (4D spectrograms)
     // Server only handles stems separation, so fallback for analysis calls
     if (!has_2d_audio) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Analysis call detected (spectrogram), using fast local CPU (correct)\n");
-        OutputDebugStringA(msg);
-
-        if (g_Config.fallback_to_local) {
-            return g_OriginalRun(session, run_options, input_names, inputs,
-                                input_len, output_names, output_names_len, outputs);
-        }
-        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Server requires 2D audio input");
+        FileLog("Analysis call detected (spectrogram) - blocking local, remote only\n");
+        // Even for analysis, block local and require remote
+        if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Local inference blocked - remote server required");
         return nullptr;
     }
 
@@ -672,16 +665,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     }
 
     if (!inferenceSuccess) {
-        char msg[512];
-        snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Remote inference failed: %s\n",
-                 errorMessage.c_str());
-        OutputDebugStringA(msg);
-
-        if (g_Config.fallback_to_local) {
-            OutputDebugStringA("VDJ-GPU-Proxy: Falling back to local inference\n");
-            return g_OriginalRun(session, run_options, input_names, inputs,
-                                input_len, output_names, output_names_len, outputs);
-        }
+        FileLog("Remote inference FAILED: %s\n", errorMessage.c_str());
         if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, errorMessage.c_str());
         return nullptr;
     }
@@ -691,40 +675,19 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     if (output_name_vec.size() == 4) {
         // We requested 4 stems
         if (outputTensors.size() != 4) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Server returned %zu outputs, expected 4 stems\n",
-                     outputTensors.size());
-            OutputDebugStringA(msg);
-            if (g_Config.fallback_to_local) {
-                return g_OriginalRun(session, run_options, input_names, inputs,
-                                    input_len, output_names, output_names_len, outputs);
-            }
+            FileLog("Server returned %zu outputs, expected 4 stems\n", outputTensors.size());
             if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Incorrect output count from server");
             return nullptr;
         }
 
-        // VDJ might want fewer outputs than we got (e.g., VDJ wants 2, we got 4)
-        // Just return the first N outputs VDJ requested
         if (outputTensors.size() < output_names_len) {
-            OutputDebugStringA("VDJ-GPU-Proxy: VDJ wants more outputs than server returned\n");
-            if (g_Config.fallback_to_local) {
-                return g_OriginalRun(session, run_options, input_names, inputs,
-                                    input_len, output_names, output_names_len, outputs);
-            }
+            FileLog("VDJ wants more outputs than server returned\n");
             if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Not enough outputs from server");
             return nullptr;
         }
     } else {
-        // Normal case: we requested exactly what VDJ wants
         if (outputTensors.size() != output_names_len) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Output count mismatch (got %zu, expected %zu)\n",
-                     outputTensors.size(), output_names_len);
-            OutputDebugStringA(msg);
-            if (g_Config.fallback_to_local) {
-                return g_OriginalRun(session, run_options, input_names, inputs,
-                                    input_len, output_names, output_names_len, outputs);
-            }
+            FileLog("Output count mismatch (got %zu, expected %zu)\n", outputTensors.size(), output_names_len);
             if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Output count mismatch from server");
             return nullptr;
         }
@@ -748,16 +711,12 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         void* buffer = nullptr;
         OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, outputTensors[i], &buffer);
         if (!ort_value) {
-            OutputDebugStringA("VDJ-GPU-Proxy: Failed to create output OrtValue\n");
+            FileLog("Failed to create output OrtValue %zu\n", i);
             for (size_t j = 0; j < i; j++) {
                 if (outputs[j]) {
                     g_OriginalApi->ReleaseValue(outputs[j]);
                     outputs[j] = nullptr;
                 }
-            }
-            if (g_Config.fallback_to_local) {
-                return g_OriginalRun(session, run_options, input_names, inputs,
-                                    input_len, output_names, output_names_len, outputs);
             }
             if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to create output tensor");
             return nullptr;
