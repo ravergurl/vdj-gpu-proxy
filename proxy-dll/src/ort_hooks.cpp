@@ -573,22 +573,17 @@ OrtStatusPtr ORT_API_CALL HookedRun(
                 session_id, httpInputs[0], outputDir, trackPath
             );
 
-            if (stemResult.success && !stemResult.local_path.empty()) {
+            inferenceSuccess = stemResult.success;
+            errorMessage = stemResult.error_message;
+
+            if (stemResult.success) {
                 char msg[512];
                 snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: VDJStem created - hash=%s, path=%s\n",
                          stemResult.audio_hash.c_str(), stemResult.local_path.c_str());
                 OutputDebugStringA(msg);
 
-                // VDJStem file created - now trigger VDJ's built-in stem loading
-                // by falling back to local inference. VDJ will detect the .vdjstem file.
-                OutputDebugStringA("VDJ-GPU-Proxy: Triggering local fallback so VDJ loads the .vdjstem file\n");
-                return g_OriginalRun(session, run_options, input_names, inputs,
-                                    input_len, output_names, output_names_len, outputs);
-            } else {
-                // File creation failed - fall back to tensor streaming
-                inferenceSuccess = stemResult.success;
-                errorMessage = stemResult.error_message;
-
+                // Return tensors to VDJ for immediate use
+                // The .vdjstem file is also saved for future caching
                 for (auto& ht : stemResult.outputs) {
                     vdj::TensorData td;
                     td.shape = std::move(ht.shape);
