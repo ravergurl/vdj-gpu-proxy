@@ -523,15 +523,12 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     }
 
     // Log what VDJ actually requested
-    char msg[512];
     std::string vdj_requested_names;
     for (size_t i = 0; i < output_names_len; i++) {
         if (i > 0) vdj_requested_names += ", ";
         vdj_requested_names += output_names[i];
     }
-    snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: VDJ requested %zu outputs: [%s]\n",
-             output_names_len, vdj_requested_names.c_str());
-    OutputDebugStringA(msg);
+    FileLog("VDJ requested %zu outputs: [%s]\n", output_names_len, vdj_requested_names.c_str());
 
     // Server always needs all 4 stem names to work correctly
     const std::vector<std::string> stem_names = {"drums", "bass", "other", "vocals"};
@@ -658,23 +655,36 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         }
     }
 
-    // Return only the outputs VDJ requested
+    // Return outputs that VDJ requested, mapping names to our tensor indices
+    // Our tensor order: drums=0, bass=1, other=2, vocals=3
     for (size_t i = 0; i < output_names_len; i++) {
+        // Find which tensor index matches VDJ's requested name
+        size_t tensorIdx = i;  // Default to sequential
+        std::string requestedName = output_names[i];
+
+        if (requestedName == "drums") tensorIdx = 0;
+        else if (requestedName == "bass") tensorIdx = 1;
+        else if (requestedName == "other") tensorIdx = 2;
+        else if (requestedName == "vocals") tensorIdx = 3;
+
+        FileLog("VDJ wants output[%zu]='%s' -> using tensor[%zu]\n", i, requestedName.c_str(), tensorIdx);
+
+        if (tensorIdx >= outputTensors.size()) {
+            FileLog("ERROR: tensor index %zu out of range (have %zu)\n", tensorIdx, outputTensors.size());
+            if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Output tensor index out of range");
+            return nullptr;
+        }
+
         // If we squeezed batch dimension from input, add it back to outputs
         // VDJ expects same shape format: [1, channels, samples]
-        if (squeezed_batch_dim && outputTensors[i].shape.size() == 2) {
-            char msg[128];
-            snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: Restoring batch dimension to output[%zu]: [%lld,%lld] -> [1,%lld,%lld]\n",
-                     i, outputTensors[i].shape[0], outputTensors[i].shape[1],
-                     outputTensors[i].shape[0], outputTensors[i].shape[1]);
-            OutputDebugStringA(msg);
-
+        if (squeezed_batch_dim && outputTensors[tensorIdx].shape.size() == 2) {
+            FileLog("Restoring batch dimension to tensor[%zu]\n", tensorIdx);
             // Insert batch dimension at front
-            outputTensors[i].shape.insert(outputTensors[i].shape.begin(), 1);
+            outputTensors[tensorIdx].shape.insert(outputTensors[tensorIdx].shape.begin(), 1);
         }
 
         void* buffer = nullptr;
-        OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, outputTensors[i], &buffer);
+        OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, outputTensors[tensorIdx], &buffer);
         if (!ort_value) {
             FileLog("Failed to create output OrtValue %zu\n", i);
             for (size_t j = 0; j < i; j++) {
