@@ -1148,26 +1148,6 @@ VdjStemResult HttpClient::CreateVdjStem(
     return result;
 }
 
-// Helper to compute audio hash on client side (for cache checking)
-std::string ComputeAudioHash(const float* audio_data, size_t num_samples) {
-    // Use first 10 seconds at 44100Hz
-    size_t max_samples = 44100 * 10 * 2;  // 10 sec stereo
-    size_t samples_to_hash = (num_samples < max_samples) ? num_samples : max_samples;
-
-    // Simple hash using polynomial rolling hash
-    uint64_t hash = 0;
-    const uint64_t prime = 31;
-    for (size_t i = 0; i < samples_to_hash; i++) {
-        int16_t sample = (int16_t)(audio_data[i] * 32767);
-        hash = hash * prime + (uint64_t)(uint16_t)sample;
-    }
-
-    // Convert to hex string
-    char hex[17];
-    snprintf(hex, sizeof(hex), "%016llx", hash);
-    return std::string(hex);
-}
-
 static std::unique_ptr<HttpClient> g_httpClient;
 static std::once_flag g_httpClientInit;
 
