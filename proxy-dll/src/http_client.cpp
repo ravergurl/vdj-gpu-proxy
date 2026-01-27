@@ -910,6 +910,204 @@ HttpInferenceResult HttpClient::RunInferenceBinary(
     return result;
 }
 
+VdjStemResult HttpClient::CreateVdjStem(
+    uint64_t session_id,
+    const HttpTensorData& audio_input,
+    const std::string& stems_folder
+) {
+    VdjStemResult result;
+    result.success = false;
+    result.cache_hit = false;
+
+    DebugLog("HTTP: CreateVdjStem START session=%llu stemsFolder=%s\n",
+             session_id, stems_folder.c_str());
+
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+
+    if (!impl_->connected || !impl_->hConnect) {
+        result.error_message = "Not connected to server";
+        DebugLog("HTTP: CreateVdjStem FAIL - %s\n", result.error_message.c_str());
+        return result;
+    }
+
+    // Build binary request
+    std::vector<uint8_t> requestBuf;
+    try {
+        // Session ID
+        BinaryProtocol::WriteUint32(requestBuf, (uint32_t)session_id);
+
+        // Audio shape
+        BinaryProtocol::WriteShape(requestBuf, audio_input.shape);
+
+        // dtype
+        BinaryProtocol::WriteUint32(requestBuf, audio_input.dtype);
+
+        // data length and data
+        BinaryProtocol::WriteUint32(requestBuf, (uint32_t)audio_input.data.size());
+        requestBuf.insert(requestBuf.end(), audio_input.data.begin(), audio_input.data.end());
+
+        // Request all 4 stems
+        const std::vector<std::string> stem_names = {"drums", "bass", "other", "vocals"};
+        BinaryProtocol::WriteUint32(requestBuf, (uint32_t)stem_names.size());
+        for (const auto& name : stem_names) {
+            BinaryProtocol::WriteString(requestBuf, name);
+        }
+
+    } catch (const std::exception& e) {
+        result.error_message = std::string("Request building failed: ") + e.what();
+        DebugLog("HTTP: CreateVdjStem request build FAILED - %s\n", e.what());
+        return result;
+    }
+
+    DebugLog("HTTP: CreateVdjStem request size=%zu bytes (%.2f MB)\n",
+             requestBuf.size(), requestBuf.size() / (1024.0 * 1024.0));
+
+    // Send request using existing DoRequest
+    std::string requestBody((const char*)requestBuf.data(), requestBuf.size());
+    std::string response = impl_->DoRequest(L"POST", L"/create_vdjstem", requestBody, L"application/octet-stream");
+
+    if (response.empty()) {
+        result.error_message = "Empty response from server";
+        DebugLog("HTTP: CreateVdjStem FAIL - %s\n", result.error_message.c_str());
+        return result;
+    }
+
+    DebugLog("HTTP: Received response: %zu bytes\n", response.size());
+
+    // Parse binary response
+    try {
+        const uint8_t* data = (const uint8_t*)response.data();
+        size_t offset = 0;
+        size_t maxSize = response.size();
+
+        // Read session_id
+        uint32_t respSessionId = BinaryProtocol::ReadUint32(data, offset);
+        DebugLog("HTTP: Response session_id=%u\n", respSessionId);
+
+        // Read status
+        uint32_t status = BinaryProtocol::ReadUint32(data, offset);
+        DebugLog("HTTP: Response status=%u\n", status);
+
+        // Read error message
+        std::string errorMsg = BinaryProtocol::ReadString(data, offset, maxSize);
+        if (status != 0) {
+            result.error_message = errorMsg.empty() ? "Server returned error" : errorMsg;
+            DebugLog("HTTP: Server error: %s\n", result.error_message.c_str());
+            return result;
+        }
+
+        // Read audio hash
+        result.audio_hash = BinaryProtocol::ReadString(data, offset, maxSize);
+        DebugLog("HTTP: Audio hash: %s\n", result.audio_hash.c_str());
+
+        // Read stem file content
+        uint32_t stemFileLen = BinaryProtocol::ReadUint32(data, offset);
+        DebugLog("HTTP: Stem file length: %u bytes\n", stemFileLen);
+
+        std::vector<uint8_t> stemFileContent;
+        if (stemFileLen > 0) {
+            if (offset + stemFileLen > maxSize) {
+                throw std::runtime_error("Stem file would exceed buffer");
+            }
+            stemFileContent.assign(data + offset, data + offset + stemFileLen);
+            offset += stemFileLen;
+            result.cache_hit = false;  // File was created
+
+            // Save the file locally
+            std::string subdir = result.audio_hash.substr(0, 2);
+            std::string stemDir = stems_folder + "\\" + subdir;
+
+            CreateDirectoryA(stems_folder.c_str(), NULL);
+            CreateDirectoryA(stemDir.c_str(), NULL);
+
+            result.local_path = stemDir + "\\" + result.audio_hash + ".vdjstem";
+
+            HANDLE hFile = CreateFileA(
+                result.local_path.c_str(),
+                GENERIC_WRITE,
+                0,
+                NULL,
+                CREATE_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                NULL
+            );
+
+            if (hFile != INVALID_HANDLE_VALUE) {
+                DWORD bytesWritten = 0;
+                WriteFile(hFile, stemFileContent.data(), (DWORD)stemFileContent.size(), &bytesWritten, NULL);
+                CloseHandle(hFile);
+                DebugLog("HTTP: VDJStem saved to: %s (%u bytes)\n", result.local_path.c_str(), bytesWritten);
+            } else {
+                DWORD err = GetLastError();
+                DebugLog("HTTP: Warning - failed to save VDJStem file (err=%u)\n", err);
+            }
+        }
+
+        // Read number of output tensors
+        uint32_t numOutputs = BinaryProtocol::ReadUint32(data, offset);
+        DebugLog("HTTP: Number of output tensors: %u\n", numOutputs);
+
+        // Parse each output tensor
+        for (uint32_t i = 0; i < numOutputs; i++) {
+            std::string outputName = BinaryProtocol::ReadString(data, offset, maxSize);
+            std::vector<int64_t> shape = BinaryProtocol::ReadShape(data, offset, maxSize);
+            uint32_t dtype = BinaryProtocol::ReadUint32(data, offset);
+            uint32_t dataLen = BinaryProtocol::ReadUint32(data, offset);
+
+            if (offset + dataLen > maxSize) {
+                throw std::runtime_error("Tensor data would exceed buffer");
+            }
+
+            HttpTensorData td;
+            td.shape = shape;
+            td.dtype = dtype;
+            td.data.assign(data + offset, data + offset + dataLen);
+            offset += dataLen;
+
+            std::string shapeStr = "[";
+            for (size_t j = 0; j < shape.size(); j++) {
+                if (j > 0) shapeStr += ",";
+                shapeStr += std::to_string(shape[j]);
+            }
+            shapeStr += "]";
+            DebugLog("HTTP: Output[%u] name=%s shape=%s dtype=%d dataLen=%u\n",
+                     i, outputName.c_str(), shapeStr.c_str(), dtype, dataLen);
+
+            result.outputs.push_back(std::move(td));
+        }
+
+        DebugLog("HTTP: Parsed %zu output tensors\n", result.outputs.size());
+        result.success = true;
+
+    } catch (const std::exception& e) {
+        result.error_message = std::string("Response parsing failed: ") + e.what();
+        DebugLog("HTTP: Response parsing FAILED - %s\n", e.what());
+        return result;
+    }
+
+    return result;
+}
+
+// Helper to compute audio hash on client side (for cache checking)
+std::string ComputeAudioHash(const float* audio_data, size_t num_samples) {
+    // Use first 10 seconds at 44100Hz
+    size_t max_samples = 44100 * 10 * 2;  // 10 sec stereo
+    size_t samples_to_hash = (num_samples < max_samples) ? num_samples : max_samples;
+
+    // Simple hash using polynomial rolling hash
+    uint64_t hash = 0;
+    const uint64_t prime = 31;
+    for (size_t i = 0; i < samples_to_hash; i++) {
+        int16_t sample = (int16_t)(audio_data[i] * 32767);
+        hash = hash * prime + (uint64_t)(uint16_t)sample;
+    }
+
+    // Convert to hex string
+    char hex[17];
+    snprintf(hex, sizeof(hex), "%016llx", hash);
+    return std::string(hex);
+}
+
 static std::unique_ptr<HttpClient> g_httpClient;
 static std::once_flag g_httpClientInit;
 

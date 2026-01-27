@@ -9,6 +9,7 @@
 #include <mutex>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 #include <string>
 #include <atomic>
@@ -24,6 +25,10 @@ static OrtApi g_HookedApi;
 static OrtApiBase g_HookedApiBase;
 static ProxyConfig g_Config = {};
 
+// Stems folder for VDJStem files
+static char g_StemsFolder[MAX_PATH] = "";
+static bool g_UseVdjStemMode = false;
+
 static void InitDefaultConfig() {
     strcpy_s(g_Config.server_address, "127.0.0.1");
     g_Config.tunnel_url[0] = '\0';
@@ -31,6 +36,16 @@ static void InitDefaultConfig() {
     g_Config.fallback_to_local = true;
     g_Config.enabled = true;
     g_Config.use_tunnel = false;
+
+    // Default stems folder
+    char* localAppData = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&localAppData, &len, "LOCALAPPDATA") == 0 && localAppData) {
+        snprintf(g_StemsFolder, MAX_PATH, "%s\\VDJ-Stems", localAppData);
+        free(localAppData);
+    } else {
+        strcpy_s(g_StemsFolder, "C:\\VDJ-Stems");
+    }
 }
 
 // Connection state
@@ -113,6 +128,17 @@ static void LoadConfig() {
     if (RegQueryValueExA(hKey, "Enabled", nullptr, nullptr, (LPBYTE)&enabled, &size) == ERROR_SUCCESS) {
         g_Config.enabled = (enabled != 0);
     }
+
+    // Read VDJStem mode
+    DWORD vdjStemMode = 0;
+    size = sizeof(vdjStemMode);
+    if (RegQueryValueExA(hKey, "UseVdjStemMode", nullptr, nullptr, (LPBYTE)&vdjStemMode, &size) == ERROR_SUCCESS) {
+        g_UseVdjStemMode = (vdjStemMode != 0);
+    }
+
+    // Read stems folder
+    size = sizeof(g_StemsFolder);
+    RegQueryValueExA(hKey, "StemsFolder", nullptr, nullptr, (LPBYTE)g_StemsFolder, &size);
 
     RegCloseKey(hKey);
 }
@@ -518,20 +544,49 @@ OrtStatusPtr ORT_API_CALL HookedRun(
             httpInputs.push_back(std::move(ht));
         }
 
-        vdj::HttpInferenceResult httpResult = vdj::GetHttpClient()->RunInferenceBinary(
-            session_id, input_name_vec, httpInputs, output_name_vec
-        );
+        // Check if VDJStem mode is enabled
+        if (g_UseVdjStemMode && !httpInputs.empty()) {
+            OutputDebugStringA("VDJ-GPU-Proxy: Using VDJStem mode\n");
 
-        inferenceSuccess = httpResult.success;
-        errorMessage = httpResult.error_message;
+            // Create VDJStem file and get tensors
+            vdj::VdjStemResult stemResult = vdj::GetHttpClient()->CreateVdjStem(
+                session_id, httpInputs[0], std::string(g_StemsFolder)
+            );
 
-        if (inferenceSuccess) {
-            for (auto& ht : httpResult.outputs) {
-                vdj::TensorData td;
-                td.shape = std::move(ht.shape);
-                td.dtype = ht.dtype;
-                td.data = std::move(ht.data);
-                outputTensors.push_back(std::move(td));
+            inferenceSuccess = stemResult.success;
+            errorMessage = stemResult.error_message;
+
+            if (stemResult.success) {
+                char msg[512];
+                snprintf(msg, sizeof(msg), "VDJ-GPU-Proxy: VDJStem created - hash=%s, path=%s\n",
+                         stemResult.audio_hash.c_str(), stemResult.local_path.c_str());
+                OutputDebugStringA(msg);
+
+                for (auto& ht : stemResult.outputs) {
+                    vdj::TensorData td;
+                    td.shape = std::move(ht.shape);
+                    td.dtype = ht.dtype;
+                    td.data = std::move(ht.data);
+                    outputTensors.push_back(std::move(td));
+                }
+            }
+        } else {
+            // Standard binary inference (no VDJStem file creation)
+            vdj::HttpInferenceResult httpResult = vdj::GetHttpClient()->RunInferenceBinary(
+                session_id, input_name_vec, httpInputs, output_name_vec
+            );
+
+            inferenceSuccess = httpResult.success;
+            errorMessage = httpResult.error_message;
+
+            if (inferenceSuccess) {
+                for (auto& ht : httpResult.outputs) {
+                    vdj::TensorData td;
+                    td.shape = std::move(ht.shape);
+                    td.dtype = ht.dtype;
+                    td.data = std::move(ht.data);
+                    outputTensors.push_back(std::move(td));
+                }
             }
         }
     } else {

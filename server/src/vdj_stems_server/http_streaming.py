@@ -1,18 +1,29 @@
 """
 HTTP streaming endpoint for progressive stem delivery.
 Uses binary format and chunked encoding instead of JSON/base64.
+Also provides VDJStem file creation endpoint.
 """
 
 import struct
 import logging
-from typing import AsyncGenerator
+import os
+from typing import AsyncGenerator, Optional
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 import numpy as np
 
 from .inference import get_engine
+from .vdjstem_creator import (
+    compute_audio_hash,
+    create_vdjstem_file,
+    get_vdjstem_path,
+    check_vdjstem_exists,
+)
 
 logger = logging.getLogger(__name__)
+
+# Configurable stems folder (can be set via environment variable)
+STEMS_FOLDER = os.environ.get("VDJ_STEMS_FOLDER", None)
 
 app = FastAPI()
 
@@ -233,6 +244,153 @@ async def inference_binary(request: Request):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.post("/create_vdjstem")
+async def create_vdjstem(request: Request):
+    """
+    Create a VDJStem file from audio data AND return tensor data.
+
+    Request format (binary):
+        [4 bytes] session_id (uint32)
+        [4 bytes] ndim (uint32)
+        [ndim * 8 bytes] shape (int64[])
+        [4 bytes] dtype (uint32)
+        [4 bytes] data_len (uint32)
+        [data_len bytes] audio data (raw float32)
+        [4 bytes] num_output_names (uint32)
+        For each output:
+            [4 bytes] name_len (uint32)
+            [name_len bytes] name (UTF-8)
+
+    Response format (binary):
+        [4 bytes] session_id (uint32)
+        [4 bytes] status (uint32) - 0=success
+        [4 bytes] error_msg_len (uint32)
+        [error_msg_len bytes] error_message (UTF-8)
+        [4 bytes] audio_hash_len (uint32)
+        [audio_hash_len bytes] audio_hash (UTF-8)
+        [4 bytes] stem_file_len (uint32)
+        [stem_file_len bytes] vdjstem file content (MP4)
+        [4 bytes] num_outputs (uint32)
+        For each output tensor:
+            [tensor data in standard format]
+    """
+    body = await request.body()
+
+    try:
+        offset = 0
+        session_id, offset = BinaryProtocol.read_uint32(body, offset)
+        audio_shape, offset = BinaryProtocol.read_shape(body, offset)
+        audio_dtype, offset = BinaryProtocol.read_uint32(body, offset)
+        audio_data_len, offset = BinaryProtocol.read_uint32(body, offset)
+        audio_bytes = body[offset:offset + audio_data_len]
+        offset += audio_data_len
+
+        # Read output names
+        num_outputs, offset = BinaryProtocol.read_uint32(body, offset)
+        output_names = []
+        for _ in range(num_outputs):
+            name, offset = BinaryProtocol.read_string(body, offset)
+            output_names.append(name)
+
+        logger.info(f"VDJStem request: session={session_id}, shape={audio_shape}, outputs={output_names}")
+
+        # Parse audio
+        audio = np.frombuffer(audio_bytes, dtype=np.float32).reshape(audio_shape)
+
+        # Compute hash for caching
+        audio_hash = compute_audio_hash(audio)
+        logger.info(f"Audio hash: {audio_hash}")
+
+        # Check if VDJStem file already exists
+        existing_path = check_vdjstem_exists(audio_hash, STEMS_FOLDER)
+
+        # Separate stems (always needed for tensor response)
+        engine = get_engine()
+        stems = engine.separate(audio)
+        logger.info(f"Separated {len(stems)} stems")
+
+        # Create VDJStem file if it doesn't exist
+        stem_file_content = b""
+        if existing_path:
+            logger.info(f"VDJStem already exists: {existing_path}")
+            with open(existing_path, "rb") as f:
+                stem_file_content = f.read()
+        else:
+            output_path = get_vdjstem_path(audio_hash, STEMS_FOLDER)
+            success = create_vdjstem_file(stems, output_path)
+            if success:
+                with open(output_path, "rb") as f:
+                    stem_file_content = f.read()
+                logger.info(f"Created VDJStem file: {output_path} ({len(stem_file_content)} bytes)")
+            else:
+                logger.warning("Failed to create VDJStem file, continuing with tensor-only response")
+
+        # Build response with both file and tensors
+        response_buf = BinaryProtocol.write_uint32(session_id)
+        response_buf += BinaryProtocol.write_uint32(0)  # status = success
+        response_buf += BinaryProtocol.write_string("")  # no error message
+        response_buf += BinaryProtocol.write_string(audio_hash)
+        response_buf += BinaryProtocol.write_uint32(len(stem_file_content))
+        response_buf += stem_file_content
+        response_buf += BinaryProtocol.write_uint32(len(output_names))
+
+        # Add tensor data for each requested output
+        for name in output_names:
+            if name not in stems:
+                logger.warning(f"Requested stem '{name}' not in results")
+                continue
+
+            stem_data = stems[name]
+            response_buf += BinaryProtocol.write_tensor(
+                name=name,
+                shape=stem_data.shape,
+                dtype=1,  # FLOAT32
+                data=stem_data.tobytes()
+            )
+
+        logger.info(f"VDJStem response: {len(response_buf)} bytes total")
+        return Response(
+            content=response_buf,
+            status_code=200,
+            media_type="application/octet-stream"
+        )
+
+    except Exception as e:
+        logger.exception("Failed to create VDJStem")
+        error_msg = str(e)
+        error_buf = BinaryProtocol.write_uint32(0)
+        error_buf += BinaryProtocol.write_uint32(1)
+        error_buf += BinaryProtocol.write_string(error_msg)
+        return Response(
+            content=error_buf,
+            status_code=400,
+            media_type="application/octet-stream"
+        )
+
+
+@app.get("/vdjstem/{audio_hash}")
+async def get_vdjstem(audio_hash: str):
+    """
+    Retrieve an existing VDJStem file by its audio hash.
+    """
+    existing_path = check_vdjstem_exists(audio_hash, STEMS_FOLDER)
+    if not existing_path:
+        return Response(
+            content=f"VDJStem not found for hash: {audio_hash}",
+            status_code=404
+        )
+
+    return FileResponse(
+        existing_path,
+        media_type="video/mp4",
+        filename=f"{audio_hash}.vdjstem",
+        headers={
+            "X-Audio-Hash": audio_hash,
+            "X-Stem-Path": existing_path,
+        }
+    )
 
 
 def run_streaming_server(host: str = "0.0.0.0", port: int = 8081):

@@ -27,6 +27,15 @@ struct ServerInfo {
     int max_batch_size;
 };
 
+struct VdjStemResult {
+    bool success;
+    std::string error_message;
+    std::string audio_hash;
+    std::string local_path;      // Where the file was saved locally
+    bool cache_hit;              // Was this a cache hit on the server?
+    std::vector<HttpTensorData> outputs;  // Tensor data for immediate use
+};
+
 class HttpClient {
 public:
     HttpClient();
@@ -54,6 +63,14 @@ public:
         const std::vector<std::string>& input_names,
         const std::vector<HttpTensorData>& inputs,
         const std::vector<std::string>& output_names
+    );
+
+    // Create a VDJStem file from audio data
+    // Returns the file saved to the specified stems folder
+    VdjStemResult CreateVdjStem(
+        uint64_t session_id,
+        const HttpTensorData& audio_input,
+        const std::string& stems_folder  // Where to save the file locally
     );
 
 private:
