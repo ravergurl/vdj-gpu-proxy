@@ -649,36 +649,66 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         }
     }
 
-    // Return outputs that VDJ requested, mapping names to our tensor indices
-    // Our tensor order: drums=0, bass=1, other=2, vocals=3
+    // VDJ expects 2 outputs: "output" (vocals) and "output2" (instrumental)
+    // We have 4 stems: drums=0, bass=1, other=2, vocals=3
+    // Need to combine drums+bass+other into instrumental
+
+    // Create instrumental tensor by summing drums + bass + other
+    vdj::TensorData instrumental;
+    if (outputTensors.size() >= 4) {
+        instrumental.shape = outputTensors[0].shape;  // Same shape as drums
+        instrumental.dtype = outputTensors[0].dtype;
+        instrumental.data.resize(outputTensors[0].data.size());
+
+        // Sum the three stem tensors (as floats)
+        size_t numFloats = instrumental.data.size() / sizeof(float);
+        float* instData = reinterpret_cast<float*>(instrumental.data.data());
+        const float* drumsData = reinterpret_cast<const float*>(outputTensors[0].data.data());
+        const float* bassData = reinterpret_cast<const float*>(outputTensors[1].data.data());
+        const float* otherData = reinterpret_cast<const float*>(outputTensors[2].data.data());
+
+        for (size_t j = 0; j < numFloats; j++) {
+            instData[j] = drumsData[j] + bassData[j] + otherData[j];
+        }
+        FileLog("Created instrumental tensor by combining drums+bass+other\n");
+    }
+
+    // Return outputs that VDJ requested
     for (size_t i = 0; i < output_names_len; i++) {
-        // Find which tensor index matches VDJ's requested name
-        size_t tensorIdx = i;  // Default to sequential
         std::string requestedName = output_names[i];
+        vdj::TensorData* tensorToUse = nullptr;
 
-        if (requestedName == "drums") tensorIdx = 0;
-        else if (requestedName == "bass") tensorIdx = 1;
-        else if (requestedName == "other") tensorIdx = 2;
-        else if (requestedName == "vocals") tensorIdx = 3;
-
-        FileLog("VDJ wants output[%zu]='%s' -> using tensor[%zu]\n", i, requestedName.c_str(), tensorIdx);
-
-        if (tensorIdx >= outputTensors.size()) {
-            FileLog("ERROR: tensor index %zu out of range (have %zu)\n", tensorIdx, outputTensors.size());
-            if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Output tensor index out of range");
-            return nullptr;
+        // Map VDJ's generic names to our stems
+        // output = vocals, output2 = instrumental (common convention)
+        if (requestedName == "output") {
+            tensorToUse = &outputTensors[3];  // vocals
+            FileLog("VDJ wants '%s' -> using vocals\n", requestedName.c_str());
+        } else if (requestedName == "output2") {
+            tensorToUse = &instrumental;  // combined instrumental
+            FileLog("VDJ wants '%s' -> using instrumental (drums+bass+other)\n", requestedName.c_str());
+        } else if (requestedName == "drums") {
+            tensorToUse = &outputTensors[0];
+        } else if (requestedName == "bass") {
+            tensorToUse = &outputTensors[1];
+        } else if (requestedName == "other") {
+            tensorToUse = &outputTensors[2];
+        } else if (requestedName == "vocals") {
+            tensorToUse = &outputTensors[3];
+        } else {
+            // Unknown name - use sequential
+            tensorToUse = &outputTensors[i % outputTensors.size()];
+            FileLog("VDJ wants unknown '%s' -> using tensor[%zu]\n", requestedName.c_str(), i % outputTensors.size());
         }
 
         // If we squeezed batch dimension from input, add it back to outputs
         // VDJ expects same shape format: [1, channels, samples]
-        if (squeezed_batch_dim && outputTensors[tensorIdx].shape.size() == 2) {
-            FileLog("Restoring batch dimension to tensor[%zu]\n", tensorIdx);
-            // Insert batch dimension at front
-            outputTensors[tensorIdx].shape.insert(outputTensors[tensorIdx].shape.begin(), 1);
+        if (squeezed_batch_dim && tensorToUse->shape.size() == 2) {
+            FileLog("Restoring batch dimension\n");
+            tensorToUse->shape.insert(tensorToUse->shape.begin(), 1);
         }
 
         void* buffer = nullptr;
-        OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, outputTensors[tensorIdx], &buffer);
+        OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, *tensorToUse, &buffer);
         if (!ort_value) {
             FileLog("Failed to create output OrtValue %zu\n", i);
             for (size_t j = 0; j < i; j++) {
