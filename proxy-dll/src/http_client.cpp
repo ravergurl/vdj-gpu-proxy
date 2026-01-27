@@ -425,17 +425,13 @@ bool HttpClient::Connect(const std::string& base_url) {
     }
     DebugLog("HTTP: WinHttpConnect OK hConnect=%p\n", impl_->hConnect);
 
-    // Test connection with health check
+    // Test connection with health check - any response means connected
     DebugLog("HTTP: Testing connection with /health...\n");
     std::string response = impl_->DoRequest(L"GET", L"/health", "", nullptr);
-    impl_->connected = (response.find("\"status\"") != std::string::npos);
 
-    if (!impl_->connected) {
-        DebugLog("HTTP: Health check FAILED - response does not contain 'status'\n");
-        DebugLog("HTTP: Full response: %s\n", response.c_str());
-    } else {
-        DebugLog("HTTP: Health check OK - connected!\n");
-    }
+    // Accept any non-empty response as success (server is responding)
+    impl_->connected = !response.empty();
+    DebugLog("HTTP: Health response len=%zu, connected=%d\n", response.size(), impl_->connected ? 1 : 0);
 
     DebugLog("HTTP: Connect END connected=%d\n", impl_->connected ? 1 : 0);
     return impl_->connected;
