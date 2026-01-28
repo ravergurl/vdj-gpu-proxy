@@ -8,13 +8,40 @@
 
 namespace vdj {
 
+// File-based logging helper (writes to %LOCALAPPDATA%\VDJ-GPU-Proxy.log)
 static void DebugLog(const char* fmt, ...) {
-    char buf[1024];
+    static FILE* logFile = nullptr;
+    static bool logInitialized = false;
+
+    if (!logInitialized) {
+        char logPath[MAX_PATH];
+        char* localAppData = nullptr;
+        size_t len = 0;
+        if (_dupenv_s(&localAppData, &len, "LOCALAPPDATA") == 0 && localAppData) {
+            snprintf(logPath, MAX_PATH, "%s\\VDJ-GPU-Proxy.log", localAppData);
+            free(localAppData);
+        } else {
+            strcpy_s(logPath, "C:\\VDJ-GPU-Proxy.log");
+        }
+        logFile = fopen(logPath, "a");
+        logInitialized = true;
+    }
+
+    char buf[2048];
     va_list args;
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
+
     OutputDebugStringA(buf);
+
+    if (logFile) {
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        fprintf(logFile, "[%02d:%02d:%02d.%03d] %s",
+                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, buf);
+        fflush(logFile);
+    }
 }
 
 // Write a simple WAV file
@@ -73,12 +100,16 @@ static bool RunFfmpeg(const std::vector<std::string>& wav_files,
     std::stringstream cmd;
     // Try common ffmpeg locations
     const char* ffmpegPath = "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe";
+    DebugLog("VDJStem: Checking for ffmpeg at: %s\n", ffmpegPath);
     if (GetFileAttributesA(ffmpegPath) == INVALID_FILE_ATTRIBUTES) {
+        DebugLog("VDJStem: Not found, trying C:\\ffmpeg\\bin\\ffmpeg.exe\n");
         ffmpegPath = "C:\\ffmpeg\\bin\\ffmpeg.exe";
     }
     if (GetFileAttributesA(ffmpegPath) == INVALID_FILE_ATTRIBUTES) {
-        ffmpegPath = "ffmpeg";  // Fall back to PATH
+        DebugLog("VDJStem: Not found, falling back to PATH\n");
+        ffmpegPath = "ffmpeg";
     }
+    DebugLog("VDJStem: Using ffmpeg: %s\n", ffmpegPath);
     cmd << "\"" << ffmpegPath << "\" -y";
 
     for (const auto& wav : wav_files) {
