@@ -714,36 +714,14 @@ OrtStatusPtr ORT_API_CALL HookedRun(
     }
 
     // Return outputs that VDJ requested
-    // IMPORTANT: VDJ pre-allocates output buffers - we must fill them, not replace them!
+    // VDJ pre-allocates output buffers with specific shapes:
+    // - output[0]: [1, 8, samples] = 4 stems × 2 channels interleaved
+    // - output[1]: [1, 16, 2048, 519] = spectrogram (we'll leave this unchanged)
     for (size_t i = 0; i < output_names_len; i++) {
         std::string requestedName = output_names[i];
-        vdj::TensorData* tensorToUse = nullptr;
-
-        // Map VDJ's generic names to our stems
-        // output = vocals, output2 = instrumental (common convention)
-        if (requestedName == "output") {
-            tensorToUse = &outputTensors[3];  // vocals
-            FileLog("VDJ wants '%s' -> using vocals\n", requestedName.c_str());
-        } else if (requestedName == "output2") {
-            tensorToUse = &instrumental;  // combined instrumental
-            FileLog("VDJ wants '%s' -> using instrumental (drums+bass+other)\n", requestedName.c_str());
-        } else if (requestedName == "drums") {
-            tensorToUse = &outputTensors[0];
-        } else if (requestedName == "bass") {
-            tensorToUse = &outputTensors[1];
-        } else if (requestedName == "other") {
-            tensorToUse = &outputTensors[2];
-        } else if (requestedName == "vocals") {
-            tensorToUse = &outputTensors[3];
-        } else {
-            // Unknown name - use sequential
-            tensorToUse = &outputTensors[i % outputTensors.size()];
-            FileLog("VDJ wants unknown '%s' -> using tensor[%zu]\n", requestedName.c_str(), i % outputTensors.size());
-        }
 
         // Check if VDJ pre-allocated the output buffer
         if (outputs[i] != nullptr) {
-            // VDJ pre-allocated - copy our data into their buffer
             FileLog("VDJ pre-allocated output[%zu], filling existing buffer\n", i);
 
             void* vdj_data = nullptr;
@@ -755,7 +733,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
                 return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to get VDJ output buffer");
             }
 
-            // Get VDJ's expected shape to verify compatibility
+            // Get VDJ's expected shape
             OrtTensorTypeAndShapeInfo* info = nullptr;
             status = g_OriginalApi->GetTensorTypeAndShape(outputs[i], &info);
             if (!status) {
@@ -772,49 +750,63 @@ OrtStatusPtr ORT_API_CALL HookedRun(
                     if (j > 0) vdjShapeStr += ",";
                     vdjShapeStr += std::to_string(vdj_shape[j]);
                 }
-
                 g_OriginalApi->ReleaseTensorTypeAndShapeInfo(info);
 
-                // Calculate our data size
-                size_t our_element_count = 1;
-                for (int64_t dim : tensorToUse->shape) {
-                    our_element_count *= (size_t)dim;
-                }
+                FileLog("VDJ buffer shape=[%s] elements=%zu\n", vdjShapeStr.c_str(), vdj_element_count);
 
-                FileLog("VDJ buffer shape=[%s] elements=%zu, our data elements=%zu\n",
-                        vdjShapeStr.c_str(), vdj_element_count, our_element_count);
+                // Handle output based on shape
+                if (requestedName == "output" && num_dims == 3 && vdj_shape[1] == 8) {
+                    // output[0]: [1, 8, samples] - interleave 4 stems × 2 channels
+                    // Order: drums_L, drums_R, bass_L, bass_R, other_L, other_R, vocals_L, vocals_R
+                    FileLog("Filling 8-channel interleaved stems buffer\n");
 
-                // Copy data - use the smaller of the two sizes for safety
-                size_t copy_elements = (vdj_element_count < our_element_count) ? vdj_element_count : our_element_count;
-                size_t copy_bytes = copy_elements * sizeof(float);
+                    float* out = reinterpret_cast<float*>(vdj_data);
+                    size_t samples = (size_t)vdj_shape[2];
+                    size_t our_samples = outputTensors[0].data.size() / (2 * sizeof(float));
 
-                if (vdj_data && tensorToUse->data.size() >= copy_bytes) {
-                    memcpy(vdj_data, tensorToUse->data.data(), copy_bytes);
-                    FileLog("Copied %zu bytes to VDJ buffer\n", copy_bytes);
+                    // Use smaller sample count
+                    size_t copy_samples = (samples < our_samples) ? samples : our_samples;
+
+                    const float* drums = reinterpret_cast<const float*>(outputTensors[0].data.data());
+                    const float* bass = reinterpret_cast<const float*>(outputTensors[1].data.data());
+                    const float* other = reinterpret_cast<const float*>(outputTensors[2].data.data());
+                    const float* vocals = reinterpret_cast<const float*>(outputTensors[3].data.data());
+
+                    // Interleave: [batch, channel, sample] layout
+                    // Channel order: 0-1=drums, 2-3=bass, 4-5=other, 6-7=vocals
+                    for (size_t s = 0; s < copy_samples; s++) {
+                        out[0 * samples + s] = drums[0 * our_samples + s];   // drums L
+                        out[1 * samples + s] = drums[1 * our_samples + s];   // drums R
+                        out[2 * samples + s] = bass[0 * our_samples + s];    // bass L
+                        out[3 * samples + s] = bass[1 * our_samples + s];    // bass R
+                        out[4 * samples + s] = other[0 * our_samples + s];   // other L
+                        out[5 * samples + s] = other[1 * our_samples + s];   // other R
+                        out[6 * samples + s] = vocals[0 * our_samples + s];  // vocals L
+                        out[7 * samples + s] = vocals[1 * our_samples + s];  // vocals R
+                    }
+                    FileLog("Interleaved %zu samples into 8 channels\n", copy_samples);
+
+                } else if (requestedName == "output2" && num_dims == 4) {
+                    // output[1]: [1, 16, 2048, 519] - spectrogram
+                    // We don't have spectrogram data, leave VDJ's original buffer unchanged
+                    FileLog("Skipping spectrogram output - leaving VDJ buffer unchanged\n");
+
                 } else {
-                    FileLog("FAILED: vdj_data=%p, our_data_size=%zu, needed=%zu\n",
-                            vdj_data, tensorToUse->data.size(), copy_bytes);
+                    // Unknown format - try simple copy
+                    FileLog("Unknown output format, attempting simple copy\n");
+                    vdj::TensorData* tensorToUse = &outputTensors[i % outputTensors.size()];
+                    size_t copy_bytes = tensorToUse->data.size();
+                    if (copy_bytes > vdj_element_count * sizeof(float)) {
+                        copy_bytes = vdj_element_count * sizeof(float);
+                    }
+                    if (vdj_data && tensorToUse->data.size() >= copy_bytes) {
+                        memcpy(vdj_data, tensorToUse->data.data(), copy_bytes);
+                        FileLog("Copied %zu bytes to VDJ buffer\n", copy_bytes);
+                    }
                 }
             }
         } else {
-            // VDJ didn't pre-allocate - create new OrtValue (fallback)
-            FileLog("VDJ did NOT pre-allocate output[%zu], creating new OrtValue\n", i);
-
-            // If we squeezed batch dimension from input, add it back to outputs
-            if (squeezed_batch_dim && tensorToUse->shape.size() == 2) {
-                FileLog("Restoring batch dimension for output %zu\n", i);
-                tensorToUse->shape.insert(tensorToUse->shape.begin(), 1);
-            }
-
-            void* buffer = nullptr;
-            OrtValue* ort_value = vdj::CreateOrtValue(g_OriginalApi, *tensorToUse, &buffer);
-            if (!ort_value) {
-                FileLog("FAILED to create output OrtValue %zu\n", i);
-                if (g_OriginalApi) return g_OriginalApi->CreateStatus(ORT_FAIL, "Failed to create output tensor");
-                return nullptr;
-            }
-            FileLog("Created OrtValue %zu successfully: ptr=%p\n", i, (void*)ort_value);
-            outputs[i] = ort_value;
+            FileLog("VDJ did NOT pre-allocate output[%zu] - unexpected!\n", i);
         }
     }
 
