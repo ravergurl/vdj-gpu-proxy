@@ -131,7 +131,8 @@ static bool RunFfmpeg(const std::vector<std::string>& wav_files,
     }
 
     // Max quality: 320k bitrate per stream
-    cmd << " -c:a aac -b:a 320k -ar 44100 -ac 2 \"" << output_path << "\"";
+    // Use -f mp4 to force MP4 format since ffmpeg doesn't recognize .vdjstems extension
+    cmd << " -c:a aac -b:a 320k -ar 44100 -ac 2 -f mp4 \"" << output_path << "\"";
 
     std::string cmdStr = cmd.str();
     DebugLog("VDJStem: Running ffmpeg: %s\n", cmdStr.c_str());
