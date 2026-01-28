@@ -761,11 +761,16 @@ OrtStatusPtr ORT_API_CALL HookedRun(
                     FileLog("Filling 8-channel interleaved stems buffer\n");
 
                     float* out = reinterpret_cast<float*>(vdj_data);
-                    size_t samples = (size_t)vdj_shape[2];
+                    size_t vdj_samples = (size_t)vdj_shape[2];
                     size_t our_samples = outputTensors[0].data.size() / (2 * sizeof(float));
 
-                    // Use smaller sample count
-                    size_t copy_samples = (samples < our_samples) ? samples : our_samples;
+                    FileLog("VDJ wants %zu samples, we have %zu samples\n", vdj_samples, our_samples);
+
+                    // Zero the entire buffer first (to handle any padding)
+                    memset(vdj_data, 0, vdj_element_count * sizeof(float));
+
+                    // Copy as many samples as we have
+                    size_t copy_samples = (vdj_samples < our_samples) ? vdj_samples : our_samples;
 
                     const float* drums = reinterpret_cast<const float*>(outputTensors[0].data.data());
                     const float* bass = reinterpret_cast<const float*>(outputTensors[1].data.data());
@@ -775,16 +780,16 @@ OrtStatusPtr ORT_API_CALL HookedRun(
                     // Interleave: [batch, channel, sample] layout
                     // Channel order: 0-1=drums, 2-3=bass, 4-5=other, 6-7=vocals
                     for (size_t s = 0; s < copy_samples; s++) {
-                        out[0 * samples + s] = drums[0 * our_samples + s];   // drums L
-                        out[1 * samples + s] = drums[1 * our_samples + s];   // drums R
-                        out[2 * samples + s] = bass[0 * our_samples + s];    // bass L
-                        out[3 * samples + s] = bass[1 * our_samples + s];    // bass R
-                        out[4 * samples + s] = other[0 * our_samples + s];   // other L
-                        out[5 * samples + s] = other[1 * our_samples + s];   // other R
-                        out[6 * samples + s] = vocals[0 * our_samples + s];  // vocals L
-                        out[7 * samples + s] = vocals[1 * our_samples + s];  // vocals R
+                        out[0 * vdj_samples + s] = drums[0 * our_samples + s];   // drums L
+                        out[1 * vdj_samples + s] = drums[1 * our_samples + s];   // drums R
+                        out[2 * vdj_samples + s] = bass[0 * our_samples + s];    // bass L
+                        out[3 * vdj_samples + s] = bass[1 * our_samples + s];    // bass R
+                        out[4 * vdj_samples + s] = other[0 * our_samples + s];   // other L
+                        out[5 * vdj_samples + s] = other[1 * our_samples + s];   // other R
+                        out[6 * vdj_samples + s] = vocals[0 * our_samples + s];  // vocals L
+                        out[7 * vdj_samples + s] = vocals[1 * our_samples + s];  // vocals R
                     }
-                    FileLog("Interleaved %zu samples into 8 channels\n", copy_samples);
+                    FileLog("Interleaved %zu samples into 8 channels (VDJ buffer has %zu)\n", copy_samples, vdj_samples);
 
                 } else if (requestedName == "output2" && num_dims == 4) {
                     // output[1]: [1, 16, 2048, 519] - spectrogram
