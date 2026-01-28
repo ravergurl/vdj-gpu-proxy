@@ -98,9 +98,13 @@ static bool RunFfmpeg(const std::vector<std::string>& wav_files,
                       const std::string& output_path) {
     // Build ffmpeg command - use full path since VDJ might not have PATH set
     std::stringstream cmd;
-    // Try common ffmpeg locations
-    const char* ffmpegPath = "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe";
+    // Try common ffmpeg locations - use real exe, not chocolatey shim
+    const char* ffmpegPath = "C:\\ProgramData\\chocolatey\\lib\\ffmpeg\\tools\\ffmpeg\\bin\\ffmpeg.exe";
     DebugLog("VDJStem: Checking for ffmpeg at: %s\n", ffmpegPath);
+    if (GetFileAttributesA(ffmpegPath) == INVALID_FILE_ATTRIBUTES) {
+        DebugLog("VDJStem: Not found, trying chocolatey bin shim\n");
+        ffmpegPath = "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe";
+    }
     if (GetFileAttributesA(ffmpegPath) == INVALID_FILE_ATTRIBUTES) {
         DebugLog("VDJStem: Not found, trying C:\\ffmpeg\\bin\\ffmpeg.exe\n");
         ffmpegPath = "C:\\ffmpeg\\bin\\ffmpeg.exe";
