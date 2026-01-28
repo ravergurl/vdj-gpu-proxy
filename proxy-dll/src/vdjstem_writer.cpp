@@ -69,9 +69,17 @@ static bool WriteWavFile(const std::string& path, const float* data,
 static bool RunFfmpeg(const std::vector<std::string>& wav_files,
                       const std::vector<std::string>& stream_titles,
                       const std::string& output_path) {
-    // Build ffmpeg command
+    // Build ffmpeg command - use full path since VDJ might not have PATH set
     std::stringstream cmd;
-    cmd << "ffmpeg -y";
+    // Try common ffmpeg locations
+    const char* ffmpegPath = "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe";
+    if (GetFileAttributesA(ffmpegPath) == INVALID_FILE_ATTRIBUTES) {
+        ffmpegPath = "C:\\ffmpeg\\bin\\ffmpeg.exe";
+    }
+    if (GetFileAttributesA(ffmpegPath) == INVALID_FILE_ATTRIBUTES) {
+        ffmpegPath = "ffmpeg";  // Fall back to PATH
+    }
+    cmd << "\"" << ffmpegPath << "\" -y";
 
     for (const auto& wav : wav_files) {
         cmd << " -i \"" << wav << "\"";
