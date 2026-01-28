@@ -788,8 +788,9 @@ OrtStatusPtr ORT_API_CALL HookedRun(
 
                 } else if (requestedName == "output2" && num_dims == 4) {
                     // output[1]: [1, 16, 2048, 519] - spectrogram
-                    // We don't have spectrogram data, leave VDJ's original buffer unchanged
-                    FileLog("Skipping spectrogram output - leaving VDJ buffer unchanged\n");
+                    // We don't have spectrogram data - zero it out so VDJ doesn't get garbage
+                    FileLog("Zeroing spectrogram output (%zu elements)\n", vdj_element_count);
+                    memset(vdj_data, 0, vdj_element_count * sizeof(float));
 
                 } else {
                     // Unknown format - try simple copy
