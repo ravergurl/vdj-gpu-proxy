@@ -713,20 +713,7 @@ OrtStatusPtr ORT_API_CALL HookedRun(
         FileLog("Created instrumental tensor by combining drums+bass+other\n");
     }
 
-    // VDJ needs valid spectrogram output. Run original model first to get it,
-    // then replace the audio stems with our remote ones.
-    FileLog("Running original model to get valid spectrogram...\n");
-    OrtStatusPtr origStatus = g_OriginalRun(session, run_options, input_names, inputs,
-                                             input_len, output_names, output_names_len, outputs);
-    if (origStatus) {
-        const char* errMsg = g_OriginalApi->GetErrorMessage(origStatus);
-        FileLog("Original model failed: %s - continuing with our stems anyway\n", errMsg ? errMsg : "unknown");
-        g_OriginalApi->ReleaseStatus(origStatus);
-    } else {
-        FileLog("Original model succeeded - spectrogram is valid\n");
-    }
-
-    // Now replace the audio output with our remote stems
+    // Fill VDJ's pre-allocated output buffers
     for (size_t i = 0; i < output_names_len; i++) {
         std::string requestedName = output_names[i];
 
@@ -803,8 +790,9 @@ OrtStatusPtr ORT_API_CALL HookedRun(
 
                 } else if (requestedName == "output2" && num_dims == 4) {
                     // output[1]: [1, 16, 2048, 519] - spectrogram
-                    // Keep the spectrogram from the original model run - don't modify it
-                    FileLog("Keeping original spectrogram output (from local model)\n");
+                    // Zero it - VDJ may not accept this but we don't have spectrogram data
+                    FileLog("Zeroing spectrogram output (%zu elements)\n", vdj_element_count);
+                    memset(vdj_data, 0, vdj_element_count * sizeof(float));
 
                 } else {
                     // Unknown format - try simple copy
